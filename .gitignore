@@ -4,4 +4,5 @@ __pycache__/
 *.index
 *.npy
 .env
+uv.lock
 data/

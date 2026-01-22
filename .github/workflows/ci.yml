@@ -27,14 +27,15 @@ jobs:
       # 'uv sync' installs dependencies from uv.lock and creates the virtual environment
       run: uv sync --all-extras --dev
 
-    - name: Lint with Black and isort
+    - name: Lint with Ruff
       run: |
-        # Fails if code isn't formatted correctly
-        black --check .
-        isort --check-only --profile black .
+        # Check formatting (replaces black)
+        uv run ruff format --check .
+        # Check linting and imports (replaces isort/flake8)
+        uv run ruff check .
 
     - name: Run Tests
       # This runs all tests in the 'tests/' folder
       # We ignore warnings to keep logs clean for now
       run: |
-        pytest tests/ -v
+        uv run pytest tests/ -v

@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+*.pth
+*.index
+*.npy
+.env
+data/

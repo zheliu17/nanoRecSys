@@ -6,7 +6,7 @@ from pydantic import field_validator
 
 class Settings(BaseSettings):
     # Paths
-    project_root: Path = Path(__file__).parent.parent.absolute()
+    project_root: Path = Path(__file__).parent.parent.parent.absolute()
     data_dir: Path = project_root / "data"
     raw_data_dir: Path = data_dir / "ml-20m"
     processed_data_dir: Path = data_dir / "processed"
@@ -59,7 +59,7 @@ class Settings(BaseSettings):
 
     # Ranker training params
     explicit_neg_weight: float = (
-        10.0  # Weight for explicit negatives in ranker training, 0 to ignore
+        4.0  # Weight for explicit negatives in ranker training, 0 to ignore
     )
     ranker_random_neg_ratio: float = (
         1.0  # Ratio of random negatives to use (0.0 to 1.0)

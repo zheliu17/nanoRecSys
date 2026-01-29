@@ -8,3 +8,7 @@ uv.lock
 data/*
 !src/data/
 !data/.gitkeep
+wandb/
+artifacts/
+!artifacts/.gitkeep
+nanoRecSys.egg-info

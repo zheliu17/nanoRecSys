@@ -1,6 +1,6 @@
 import pytest
 import pandas as pd
-from src.config import settings
+from nanoRecSys.config import settings
 
 
 @pytest.fixture
@@ -18,20 +18,37 @@ def data_splits():
 def test_split_temporal_ordering(data_splits):
     train, val, test = data_splits
 
-    train_max_ts = train["timestamp"].max()
-    val_min_ts = val["timestamp"].min()
-    val_max_ts = val["timestamp"].max()
-    test_min_ts = test["timestamp"].min()
+    # We check for temporal ordering PER USER.
+    # This logic is valid for both Global Time Split and User-Based Time Split.
+    # Condition: For each user, max(Train) <= min(Val) <= max(Val) <= min(Test)
 
-    # Check that Train ends before Val starts
-    assert train_max_ts <= val_min_ts, (
-        "Train data overlaps with Validation data (Time Leakage)"
-    )
+    # Train max timestamp per user
+    train_max = train.groupby("user_idx")["timestamp"].max()
 
-    # Check that Val ends before Test starts
-    assert val_max_ts <= test_min_ts, (
-        "Validation data overlaps with Test data (Time Leakage)"
-    )
+    # Val min/max timestamp per user
+    val_min = val.groupby("user_idx")["timestamp"].min()
+    val_max = val.groupby("user_idx")["timestamp"].max()
+
+    # Test min timestamp per user
+    test_min = test.groupby("user_idx")["timestamp"].min()
+
+    # Check Train vs Val
+    # Only for users present in both partitions
+    common_tv = train_max.index.intersection(val_min.index)
+    if len(common_tv) > 0:
+        # Check if any user has train_max > val_min
+        violations = train_max[common_tv] > val_min[common_tv]
+        assert not violations.any(), (
+            f"Found {violations.sum()} users where Train interactions occur after Validation interactions."
+        )
+
+    # Check Val vs Test
+    common_vt = val_max.index.intersection(test_min.index)
+    if len(common_vt) > 0:
+        violations = val_max[common_vt] > test_min[common_vt]
+        assert not violations.any(), (
+            f"Found {violations.sum()} users where Validation interactions occur after Test interactions."
+        )
 
 
 @pytest.mark.data

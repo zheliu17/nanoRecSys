@@ -4,7 +4,7 @@ import requests
 import pandas as pd
 import numpy as np
 from tqdm import tqdm
-from src.config import settings
+from nanoRecSys.config import settings
 
 
 def download_and_extract():
@@ -19,7 +19,7 @@ def download_and_extract():
         return
 
     print(f"Downloading {url}...")
-    response = requests.get(url, stream=True)
+    response = requests.get(url, stream=True)  # type: ignore
     total_size_in_bytes = int(response.headers.get("content-length", 0))
     block_size = 1024  # 1 Kibibyte
     progress_bar = tqdm(total=total_size_in_bytes, unit="iB", unit_scale=True)
@@ -39,8 +39,14 @@ def download_and_extract():
     print("Download and extraction complete.")
 
 
-def process_data():
-    """Load raw data, encode IDs, and save processed files."""
+def process_data(min_interactions=None):
+    """
+    Load raw data, encode IDs, and save processed files.
+
+    Args:
+        min_interactions (int, optional): If set, perform k-core filtering.
+                                          Recursively remove users/items with fewer than k interactions.
+    """
     ratings_path = settings.raw_data_dir / "ratings.csv"
     movies_path = settings.raw_data_dir / "movies.csv"
 
@@ -48,13 +54,35 @@ def process_data():
         download_and_extract()
 
     print("Loading ratings.csv...")
-    # Use simpler types to save memory
     df = pd.read_csv(
         ratings_path,
         dtype={"userId": int, "movieId": int, "rating": float, "timestamp": int},
     )
 
     print(f"Raw interactions: {len(df)}")
+
+    # Optional: k-core filtering
+    if min_interactions is not None:
+        print(f"Applying {min_interactions}-core filtering (recursive)...")
+        while True:
+            start_len = len(df)
+
+            # Filter users
+            user_counts = df["userId"].value_counts()
+            valid_users = user_counts[user_counts >= min_interactions].index
+            df = df[df["userId"].isin(valid_users)]
+
+            # Filter items
+            item_counts = df["movieId"].value_counts()
+            valid_items = item_counts[item_counts >= min_interactions].index
+            df = df[df["movieId"].isin(valid_items)]
+
+            if len(df) == start_len:
+                break
+
+            print(f"Reduced to {len(df)} interactions...")
+
+        print(f"Final interactions after {min_interactions}-core filtering: {len(df)}")
 
     # 1. Encode Users
     unique_users = df["userId"].unique()
@@ -69,7 +97,6 @@ def process_data():
     movie2id = {m: i for i, m in enumerate(unique_movies)}
 
     # Map movies in ratings
-    # Note: ratings could theoretically have movies not in movies.csv? Unlikely in ML-20M.
     df = df[df["movieId"].isin(unique_movies)]  # filter valid movies
     df["item_idx"] = df["movieId"].map(movie2id)
 
@@ -81,9 +108,6 @@ def process_data():
     print("Saving processed data...")
     df.to_parquet(settings.processed_data_dir / "interactions.parquet", index=False)
 
-    # Save dictionaries (optional, but good for inference mapping)
-    # Using numpy/pickle or just json is fine. ID maps can be large.
-    # Let's save as simple CSVs or pickles.
     np.save(settings.processed_data_dir / "user_map.npy", unique_users)
     np.save(settings.processed_data_dir / "item_map.npy", unique_movies)
 
@@ -93,4 +117,15 @@ def process_data():
 
 
 if __name__ == "__main__":
-    process_data()
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Build/Process MovieLens Dataset")
+    parser.add_argument(
+        "--k_core",
+        type=int,
+        default=None,
+        help="Apply recursive k-core filtering (remove users/items with < k interactions). Default: None (no filtering).",
+    )
+    args = parser.parse_args()
+
+    process_data(min_interactions=args.k_core)

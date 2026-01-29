@@ -1,7 +1,10 @@
 [project]
 name = "nanoRecSys"
 version = "0.1.0"
-description = ""
+authors = [
+    {name = "Zhe Liu"}
+]
+description = "A nano recommendation system project"
 readme = "README.md"
 requires-python = ">=3.8"
 dependencies = [

@@ -3,7 +3,7 @@
 import numpy as np
 import torch
 import pandas as pd
-from nanoRecSys.config import settings
+from ..config import settings
 
 
 def get_vocab_sizes():

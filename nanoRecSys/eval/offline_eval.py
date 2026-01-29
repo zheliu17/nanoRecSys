@@ -3,12 +3,12 @@ import pandas as pd
 import numpy as np
 import sys
 from tqdm import tqdm
-from nanoRecSys.config import settings
-from nanoRecSys.eval.metrics import compute_batch_metrics
-from nanoRecSys.models.ranker import RankerModel
-from nanoRecSys.data.datasets import load_item_metadata
-from nanoRecSys.utils.utils import get_vocab_sizes, compute_item_probabilities
-from nanoRecSys.training.mine_negatives import load_all_positives
+from ..config import settings
+from .metrics import compute_batch_metrics
+from ..models.ranker import RankerModel
+from ..data.datasets import load_item_metadata
+from ..utils.utils import get_vocab_sizes, compute_item_probabilities
+from ..training.mine_negatives import load_all_positives
 
 
 class OfflineEvaluator:

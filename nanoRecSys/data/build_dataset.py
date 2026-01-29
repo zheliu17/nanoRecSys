@@ -4,7 +4,7 @@ import requests
 import pandas as pd
 import numpy as np
 from tqdm import tqdm
-from nanoRecSys.config import settings
+from ..config import settings
 
 
 def download_and_extract():

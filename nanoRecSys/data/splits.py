@@ -1,6 +1,6 @@
 import pandas as pd
 import numpy as np
-from nanoRecSys.config import settings
+from ..config import settings
 
 
 def load_processed_data() -> pd.DataFrame:

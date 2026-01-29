@@ -1,7 +1,7 @@
 import argparse
-from nanoRecSys.config import settings
-from nanoRecSys.training import train_retriever, train_ranker
-from nanoRecSys.utils.utils import get_vocab_sizes
+from .config import settings
+from .training import train_retriever, train_ranker
+from .utils.utils import get_vocab_sizes
 
 
 def optional_float(v):

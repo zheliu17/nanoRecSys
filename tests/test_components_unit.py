@@ -3,7 +3,6 @@ import torch
 import pandas as pd
 from unittest.mock import patch, MagicMock
 
-# Import components under test
 from nanoRecSys.models.towers import Tower
 from nanoRecSys.models.losses import InfoNCELoss
 from nanoRecSys.models.ranker import RankerModel

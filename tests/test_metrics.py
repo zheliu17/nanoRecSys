@@ -1,6 +1,12 @@
 import numpy as np
 import pytest
-from src.eval.metrics import recall_at_k, ndcg_at_k, mrr_at_k
+from nanoRecSys.eval.metrics import (
+    recall_at_k,
+    ndcg_at_k,
+    mrr_at_k,
+    hit_rate_at_k,
+    compute_batch_metrics,
+)
 
 
 @pytest.fixture
@@ -59,7 +65,7 @@ def test_ndcg_at_k_simple():
     # IDCG = 1/log2(2) + 1/log2(3) = 1.0 + 0.6309 = 1.6309
     # NDCG = 1.0 / 1.6309 = 0.613
 
-    score = ndcg_at_k(preds, targets, k=2)
+    score = ndcg_at_k(preds, targets, k=2)  # type: ignore
     assert score == pytest.approx(1.0 / 1.6309, rel=1e-3)
 
 
@@ -67,6 +73,33 @@ def test_metrics_empty_targets():
     preds = np.array([[1, 2, 3]])
     targets = [[]]  # Empty target
 
-    assert recall_at_k(preds, targets, k=3) == 0.0
-    assert ndcg_at_k(preds, targets, k=3) == 0.0
-    assert mrr_at_k(preds, targets, k=3) == 0.0
+    assert recall_at_k(preds, targets, k=3) == 0.0  # type: ignore
+    assert ndcg_at_k(preds, targets, k=3) == 0.0  # type: ignore
+    assert mrr_at_k(preds, targets, k=3) == 0.0  # type: ignore
+
+
+def test_hit_rate_at_k(mock_predictions, mock_targets):
+    # k=3
+    # User 0: preds=[10, 20, 30], targets=[10, 30, 99]. Hits: 10, 30. HitRate: 1.0 (has hits)
+    # User 1: preds=[11, 22, 33], targets=[99, 88]. Hits: 0. HitRate: 0.0
+    # User 2: preds=[1, 2, 3], targets=[1, 5]. Hits: 1. HitRate: 1.0 (has hits)
+    # Mean: (1.0 + 0.0 + 1.0) / 3 = 0.6666
+
+    score = hit_rate_at_k(mock_predictions, mock_targets, k=3)
+    assert score == pytest.approx(0.6666, rel=1e-3)
+
+
+def test_compute_batch_metrics(mock_predictions, mock_targets):
+    # batch metrics return SUM
+    results = compute_batch_metrics(mock_predictions, mock_targets, k_list=[3])
+
+    # Recall@3
+    # hits: User 0: 2, User 1: 0, User 2: 1
+    # n_rel: User 0: 3, User 1: 2, User 2: 2
+    # recall: 2/3 + 0 + 1/2 = 0.666 + 0.5 = 1.1666
+    assert results["Recall@3"] == pytest.approx(1.1666, rel=1e-3)
+
+    # HitRate@3
+    # User 0: 1, User 1: 0, User 2: 1
+    # sum: 2.0
+    assert results["HitRate@3"] == pytest.approx(2.0, rel=1e-3)

@@ -12,6 +12,7 @@ dependencies = [
     "ipykernel",
     "matplotlib",
     "mypy",
+    "nbstripout",
     "numpy",
     "pandas",
     "pyarrow",

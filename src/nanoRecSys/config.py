@@ -1,6 +1,6 @@
 from typing import Union
 from pathlib import Path
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import field_validator
 
 
@@ -86,13 +86,13 @@ class Settings(BaseSettings):
             return None
         return v
 
-    model_config = {
-        "env_file": ".env",
-        "env_file_encoding": "utf-8",
-    }
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+    )
 
 
-settings = Settings()
+settings: Settings = Settings()
 
 # Ensure directories exist
 settings.data_dir.mkdir(parents=True, exist_ok=True)

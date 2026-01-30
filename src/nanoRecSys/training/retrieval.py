@@ -39,6 +39,8 @@ class RetrievalPL(pl.LightningModule):
         n_users,
         n_items,
         embed_dim,
+        output_dim,
+        hidden_dims,
         lr,
         weight_decay,
         adam_beta1,
@@ -61,8 +63,12 @@ class RetrievalPL(pl.LightningModule):
         self.val_users = val_users
         self.val_ground_truth = val_ground_truth
 
-        self.user_tower = UserTower(n_users, embed_dim=embed_dim, output_dim=embed_dim)
-        self.item_tower = ItemTower(n_items, embed_dim=embed_dim, output_dim=embed_dim)
+        self.user_tower = UserTower(
+            n_users, embed_dim=embed_dim, output_dim=output_dim, hidden_dims=hidden_dims
+        )
+        self.item_tower = ItemTower(
+            n_items, embed_dim=embed_dim, output_dim=output_dim, hidden_dims=hidden_dims
+        )
         self.model = TwoTowerModel(self.user_tower, self.item_tower)
         self.criterion = InfoNCELoss(temperature=temperature)
         self.lr = lr
@@ -307,6 +313,8 @@ def train_retriever(args, vocab_sizes):
         n_users,
         n_items,
         settings.embed_dim,
+        settings.tower_out_dim,
+        settings.towers_hidden_dims,
         lr=args.lr,
         weight_decay=args.weight_decay,
         adam_beta1=args.adam_beta1,

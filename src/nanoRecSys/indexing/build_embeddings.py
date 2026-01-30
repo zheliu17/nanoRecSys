@@ -60,7 +60,7 @@ def build_item_embeddings(
         model: Optional pre-loaded ItemTower model. If None, loads from checkpoint.
 
     Returns:
-        Numpy array of shape (n_items, embed_dim) containing L2-normalized embeddings
+        Numpy array of shape (n_items, tower_out_dim) containing L2-normalized embeddings
     """
     if device is None:
         device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -76,7 +76,12 @@ def build_item_embeddings(
     if item_tower is None:
         # Load trained ItemTower model
         print("Loading trained ItemTower model...")
-        item_tower = ItemTower(n_items, embed_dim=settings.embed_dim).to(device)
+        item_tower = ItemTower(
+            n_items,
+            embed_dim=settings.embed_dim,
+            output_dim=settings.tower_out_dim,
+            hidden_dims=settings.towers_hidden_dims,
+        ).to(device)
 
         model_path = settings.artifacts_dir / "item_tower.pth"
         try:
@@ -114,7 +119,7 @@ def build_user_embeddings(
         model: Optional pre-loaded UserTower model. If None, loads from checkpoint.
 
     Returns:
-        Numpy array of shape (n_users, embed_dim) containing L2-normalized embeddings
+        Numpy array of shape (n_users, tower_out_dim) containing L2-normalized embeddings
     """
     if device is None:
         device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -130,7 +135,12 @@ def build_user_embeddings(
     if user_tower is None:
         # Load trained UserTower model
         print("Loading trained UserTower model...")
-        user_tower = UserTower(n_users, embed_dim=settings.embed_dim).to(device)
+        user_tower = UserTower(
+            n_users,
+            embed_dim=settings.embed_dim,
+            output_dim=settings.tower_out_dim,
+            hidden_dims=settings.towers_hidden_dims,
+        ).to(device)
 
         model_path = settings.artifacts_dir / "user_tower.pth"
         try:

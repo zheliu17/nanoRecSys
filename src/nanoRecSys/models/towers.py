@@ -12,9 +12,9 @@ class Tower(nn.Module):
     def __init__(
         self,
         vocab_size: int,
-        embed_dim: int = 128,
-        output_dim: int = 64,
-        hidden_dims: List[int] = [128],
+        embed_dim: int = 256,
+        output_dim: int = 128,
+        hidden_dims: List[int] = [256, 192],
         dropout: float = 0.1,
     ):
         super().__init__()
@@ -35,7 +35,7 @@ class Tower(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # x: (batch_size,)
         emb = self.embedding(x)  # (batch, embed)
-        out = self.mlp(emb)  # (batch, out_dim)
+        out = self.mlp(emb)  # (batch, tower_out_dim)
         return F.normalize(out, p=2, dim=1)  # L2 normalize for cosine similarity
 
 

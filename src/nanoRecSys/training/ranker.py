@@ -442,7 +442,7 @@ def train_ranker(args, vocab_sizes):
         print("Item Embeddings will be FROZEN (LR=0).")
 
     model = RankerPL(
-        embed_dim=settings.embed_dim,
+        embed_dim=settings.tower_out_dim,
         genre_matrix=genre_matrix,
         year_indices=year_indices,
         popularity=item_popularity,

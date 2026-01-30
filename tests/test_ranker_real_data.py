@@ -60,7 +60,7 @@ def test_ranker_overfits_real_data():
     print(f"Negative Sample: User={u_idx_neg}, Item={i_idx_neg}")
 
     # 3. Model Setup (Infer dims from data)
-    input_dim = user_embs.shape[1]  # Should be 64
+    input_dim = user_embs.shape[1]
     num_genres = genre_matrix.shape[1]
     num_years = int(year_indices.max()) + 1
 

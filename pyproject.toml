@@ -28,6 +28,12 @@ dependencies = [
     "wandb",
 ]
 
+[project.optional-dependencies]
+dev = [
+    "faiss-cpu",
+    "nbstripout",
+]
+
 [build-system]
 requires = ["setuptools", "wheel"]
 build-backend = "setuptools.build_meta"

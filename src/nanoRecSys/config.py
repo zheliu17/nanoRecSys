@@ -27,7 +27,9 @@ class Settings(BaseSettings):
     )
 
     # Model params
-    embed_dim: int = 64
+    embed_dim: int = 256
+    tower_out_dim: int = 128
+    towers_hidden_dims: list[int] = [256, 192]
     id_dropout: float = 0.1  # Default probability for ID modality dropout
     temperature: float = 0.1  # InfoNCE loss temperature
 

@@ -5,7 +5,7 @@ import torch.nn as nn
 class RankerModel(nn.Module):
     def __init__(
         self,
-        input_dim=64,
+        input_dim=128,
         hidden_dims=[256, 128, 64],
         num_genres=20,
         genre_dim=16,
@@ -21,9 +21,8 @@ class RankerModel(nn.Module):
         nn.init.kaiming_uniform_(self.genre_embeddings.weight, nonlinearity="relu")
         nn.init.kaiming_uniform_(self.year_embeddings.weight, nonlinearity="relu")
 
-        # Usage in forward:
-        # User (64) + Item (64) + Prod (64) + Pop (1) + Year (8) + Genre (16) + IsUnknown (1)
-        # = 217 + 1 = 218
+        # Example input features:
+        # User (128) + Item (128) + Prod (128) + Pop (1) + Year (8) + Genre (16) + IsUnknown (1)
         self.concat_dim = (
             input_dim + input_dim + input_dim + 1 + year_dim + genre_dim + 1
         )
@@ -59,8 +58,8 @@ class RankerModel(nn.Module):
         id_dropout_prob=0.0,
     ):
         """
-        user_emb: (B, 64)
-        item_emb: (B, 64)
+        user_emb: (B, input_dim)
+        item_emb: (B, input_dim)
         genre_multihot: (B, num_genres)
         year_idx: (B,)
         popularity: (B, 1) or (B,)
@@ -84,7 +83,7 @@ class RankerModel(nn.Module):
         # Element-wise product (with MASKED item)
         # If item is unknown (masked), dot product will be 0, which is correct
         # Explicit Product https://arxiv.org/abs/1708.05031
-        dot_product = user_emb * i_emb_masked  # (B, 64)
+        dot_product = user_emb * i_emb_masked  # (B, input_dim)
 
         # Ensure popularity is (B, 1)
         if popularity.dim() == 1:
@@ -103,9 +102,9 @@ class RankerModel(nn.Module):
         # Concatenate
         x = torch.cat(
             [
-                user_emb,  # 64
-                i_emb_masked,  # 64
-                dot_product,  # 64
+                user_emb,  # input_dim
+                i_emb_masked,  # input_dim
+                dot_product,  # input_dim
                 popularity,  # 1
                 year_emb,  # 8
                 genre_emb,  # 16

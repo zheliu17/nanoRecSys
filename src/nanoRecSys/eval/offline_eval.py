@@ -239,7 +239,7 @@ class OfflineEvaluator:
 
         # 3. Model
         self.ranker = RankerModel(
-            input_dim=settings.embed_dim,
+            input_dim=settings.tower_out_dim,
             hidden_dims=settings.ranker_hidden_dims,
             num_genres=n_genres,
             num_years=n_years,
@@ -416,7 +416,7 @@ class OfflineEvaluator:
             flat_u_emb = (
                 batch_u_emb.unsqueeze(1)
                 .expand(-1, k_cands, -1)
-                .reshape(-1, settings.embed_dim)
+                .reshape(-1, settings.tower_out_dim)
             )
 
             # Fetch Item Embeddings & Metadata

@@ -6,7 +6,7 @@ import torch
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
-from ..config import settings
+from nanoRecSys.config import settings
 
 
 def load_all_positives() -> dict:

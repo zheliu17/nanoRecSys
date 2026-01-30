@@ -1,6 +1,6 @@
 import numpy as np
 import faiss
-from ..config import settings
+from nanoRecSys.config import settings
 
 
 def build_ivfpq_index(nlist=128, m=8, nbits=8):

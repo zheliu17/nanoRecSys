@@ -11,12 +11,12 @@ from pytorch_lightning.loggers import WandbLogger
 from pytorch_lightning.callbacks import ModelCheckpoint
 from torch.optim.lr_scheduler import LambdaLR
 
-from ..config import settings
-from ..data.datasets import InteractionsDataset, UniqueUserDataset
-from ..models.towers import TwoTowerModel, UserTower, ItemTower
-from ..models.losses import InfoNCELoss
-from ..eval.metrics import recall_at_k
-from ..utils.utils import (
+from nanoRecSys.config import settings
+from nanoRecSys.data.datasets import InteractionsDataset, UniqueUserDataset
+from nanoRecSys.models.towers import TwoTowerModel, UserTower, ItemTower
+from nanoRecSys.models.losses import InfoNCELoss
+from nanoRecSys.eval.metrics import recall_at_k
+from nanoRecSys.utils.utils import (
     compute_item_probabilities,
     collate_fn_numpy_to_tensor,
 )
@@ -364,7 +364,7 @@ def train_retriever(args, vocab_sizes):
 
     if getattr(args, "build_embeddings", False):
         print("Generating embeddings from trained model...")
-        from ..indexing.build_embeddings import (
+        from nanoRecSys.indexing.build_embeddings import (
             build_item_embeddings,
             build_user_embeddings,
         )

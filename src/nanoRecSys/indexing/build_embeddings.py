@@ -3,9 +3,9 @@
 import torch
 import numpy as np
 from tqdm import tqdm
-from ..config import settings
-from ..models.towers import UserTower, ItemTower
-from ..utils.utils import get_vocab_sizes
+from nanoRecSys.config import settings
+from nanoRecSys.models.towers import UserTower, ItemTower
+from nanoRecSys.utils.utils import get_vocab_sizes
 
 
 def generate_embeddings(

@@ -1,6 +1,6 @@
 import numpy as np
 import faiss
-from ..config import settings
+from nanoRecSys.config import settings
 
 
 def build_flat_index():

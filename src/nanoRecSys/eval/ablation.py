@@ -2,8 +2,8 @@ import time
 import numpy as np
 import pandas as pd
 import faiss
-from ..config import settings
-from .metrics import recall_at_k
+from nanoRecSys.config import settings
+from nanoRecSys.eval.metrics import recall_at_k
 
 # Constants for ablation
 N_LISTS = [64, 128, 256, 512]

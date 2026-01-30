@@ -11,15 +11,15 @@ from pytorch_lightning.loggers import WandbLogger
 from pytorch_lightning.callbacks import ModelCheckpoint
 from torch.optim.lr_scheduler import LambdaLR
 
-from ..config import settings
-from ..data.datasets import (
+from nanoRecSys.config import settings
+from nanoRecSys.data.datasets import (
     RankerTrainDataset,
     RankerEvalDataset,
     load_item_metadata,
 )
-from ..models.ranker import RankerModel
-from ..models.losses import get_ranker_loss
-from ..utils.utils import (
+from nanoRecSys.models.ranker import RankerModel
+from nanoRecSys.models.losses import get_ranker_loss
+from nanoRecSys.utils.utils import (
     compute_item_probabilities,
     collate_fn_numpy_to_tensor,
 )

@@ -9,6 +9,7 @@ readme = "README.md"
 requires-python = ">=3.8"
 dependencies = [
     "fastapi",
+    "faiss-cpu",
     "ipykernel",
     "matplotlib",
     "mypy",
@@ -19,6 +20,7 @@ dependencies = [
     "pydantic-settings >=2.0.0",
     "pytest",
     "pytorch-lightning",
+    "redis",
     "requests",
     "ruff",
     "torch",
@@ -26,12 +28,14 @@ dependencies = [
     "tqdm",
     "uvicorn",
     "wandb",
+    "httpx",
 ]
 
 [project.optional-dependencies]
 dev = [
-    "faiss-cpu",
     "nbstripout",
+    "locust",
+    "streamlit",
 ]
 
 [build-system]

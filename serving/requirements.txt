@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+redis
+faiss-cpu
+torch
+numpy
+pandas
+pyarrow
+pydantic
+pydantic-settings

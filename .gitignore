@@ -12,3 +12,4 @@ wandb/
 artifacts/
 !artifacts/.gitkeep
 nanoRecSys.egg-info
+logs/

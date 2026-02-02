@@ -9,6 +9,7 @@ def client():
         yield c
 
 
+@pytest.mark.data
 def test_health_check(client):
     """Test the health check endpoint."""
     response = client.get("/health")
@@ -16,6 +17,7 @@ def test_health_check(client):
     assert response.json() == {"status": "ok"}
 
 
+@pytest.mark.data
 def test_recommend_endpoint_structure(client):
     """Test the recommend endpoint returns the correct structure."""
     payload = {"user_id": 1, "k": 5, "explain": False, "include_history": False}
@@ -41,6 +43,7 @@ def test_recommend_endpoint_structure(client):
     assert len(data["movie_ids"]) <= payload["k"]
 
 
+@pytest.mark.data
 def test_recommend_endpoint_unknown_user(client):
     """Test the recommend endpoint handles unknown users gracefully."""
     # Use a very large user ID that definitely doesn't exist
@@ -53,6 +56,7 @@ def test_recommend_endpoint_unknown_user(client):
     assert len(data["movie_ids"]) > 0
 
 
+@pytest.mark.data
 def test_recommend_with_explanation(client):
     """Test that requesting explanations returns them."""
     payload = {"user_id": 1, "k": 3, "explain": True, "include_history": False}

@@ -5,20 +5,22 @@ import pandas as pd
 import numpy as np
 from tqdm import tqdm
 from nanoRecSys.config import settings
+from nanoRecSys.utils.logging_config import get_logger
 
 
 def download_and_extract():
     """Download MovieLens 20M dataset if not already present."""
+    logger = get_logger()
     url = settings.ml_20m_url
     zip_path = settings.data_dir / "ml-20m.zip"
 
     # Check if data already exists (e.g. ratings.csv)
     ratings_path = settings.raw_data_dir / "ratings.csv"
     if ratings_path.exists():
-        print(f"Data already exists at {settings.raw_data_dir}")
+        logger.info(f"Data already exists at {settings.raw_data_dir}")
         return
 
-    print(f"Downloading {url}...")
+    logger.info(f"Downloading {url}...")
     response = requests.get(url, stream=True)  # type: ignore
     total_size_in_bytes = int(response.headers.get("content-length", 0))
     block_size = 1024  # 1 Kibibyte
@@ -30,13 +32,13 @@ def download_and_extract():
             file.write(data)
     progress_bar.close()
 
-    print("Extracting...")
+    logger.info("Extracting...")
     with zipfile.ZipFile(zip_path, "r") as zip_ref:
         zip_ref.extractall(settings.data_dir)
 
     # Clean up zip file
     os.remove(zip_path)
-    print("Download and extraction complete.")
+    logger.info("Download and extraction complete.")
 
 
 def process_data(min_interactions=None):
@@ -47,23 +49,24 @@ def process_data(min_interactions=None):
         min_interactions (int, optional): If set, perform k-core filtering.
                                           Recursively remove users/items with fewer than k interactions.
     """
+    logger = get_logger()
     ratings_path = settings.raw_data_dir / "ratings.csv"
     movies_path = settings.raw_data_dir / "movies.csv"
 
     if not ratings_path.exists():
         download_and_extract()
 
-    print("Loading ratings.csv...")
+    logger.info("Loading ratings.csv...")
     df = pd.read_csv(
         ratings_path,
         dtype={"userId": int, "movieId": int, "rating": float, "timestamp": int},
     )
 
-    print(f"Raw interactions: {len(df)}")
+    logger.info(f"Raw interactions: {len(df)}")
 
     # Optional: k-core filtering
     if min_interactions is not None:
-        print(f"Applying {min_interactions}-core filtering (recursive)...")
+        logger.info(f"Applying {min_interactions}-core filtering (recursive)...")
         while True:
             start_len = len(df)
 
@@ -80,9 +83,11 @@ def process_data(min_interactions=None):
             if len(df) == start_len:
                 break
 
-            print(f"Reduced to {len(df)} interactions...")
+            logger.info(f"Reduced to {len(df)} interactions...")
 
-        print(f"Final interactions after {min_interactions}-core filtering: {len(df)}")
+        logger.info(
+            f"Final interactions after {min_interactions}-core filtering: {len(df)}"
+        )
 
     # 1. Encode Users
     unique_users = df["userId"].unique()
@@ -91,7 +96,7 @@ def process_data(min_interactions=None):
 
     # 2. Encode Items
     # Load movies to ensure we cover all movies, not just those in ratings (though ML-20m is dense)
-    print("Loading movies.csv...")
+    logger.info("Loading movies.csv...")
     movies_df = pd.read_csv(movies_path)
     unique_movies = movies_df["movieId"].unique()
     movie2id = {m: i for i, m in enumerate(unique_movies)}
@@ -100,12 +105,12 @@ def process_data(min_interactions=None):
     df = df[df["movieId"].isin(unique_movies)]  # filter valid movies
     df["item_idx"] = df["movieId"].map(movie2id)
 
-    print(f"Num Users: {len(unique_users)}")
-    print(f"Num Items: {len(unique_movies)}")
-    print(f"Num Interactions: {len(df)}")
+    logger.info(f"Num Users: {len(unique_users)}")
+    logger.info(f"Num Items: {len(unique_movies)}")
+    logger.info(f"Num Interactions: {len(df)}")
 
     # Save processed
-    print("Saving processed data...")
+    logger.info("Saving processed data...")
     df.to_parquet(settings.processed_data_dir / "interactions.parquet", index=False)
 
     np.save(settings.processed_data_dir / "user_map.npy", unique_users)
@@ -113,7 +118,7 @@ def process_data(min_interactions=None):
 
     # Create sparse matrix or simple index for popularity baseline later
 
-    print("Data processing complete.")
+    logger.info("Data processing complete.")
 
 
 if __name__ == "__main__":

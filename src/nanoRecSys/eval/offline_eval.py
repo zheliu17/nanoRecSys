@@ -8,6 +8,7 @@ from nanoRecSys.eval.metrics import compute_batch_metrics
 from nanoRecSys.models.ranker import RankerModel
 from nanoRecSys.data.datasets import load_item_metadata
 from nanoRecSys.utils.utils import get_vocab_sizes, compute_item_probabilities
+from nanoRecSys.utils.logging_config import get_logger
 from nanoRecSys.training.mine_negatives import load_all_positives
 
 
@@ -19,16 +20,17 @@ class OfflineEvaluator:
         sampled=False,
         sample_strategy="uniform",
     ):
+        logger = get_logger()
         self.batch_size = batch_size
         self.k_list = k_list
         self.max_k = max(k_list)
         self.sampled = sampled
         self.sample_strategy = sample_strategy
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        print(f"Using device: {self.device}")
+        logger.info(f"Using device: {self.device}")
 
         self.n_users, self.n_items = get_vocab_sizes()
-        print(f"Vocab: Users={self.n_users}, Items={self.n_items}")
+        logger.info(f"Vocab: Users={self.n_users}, Items={self.n_items}")
 
         self.test_users, self.test_targets = self._load_test_data()
 
@@ -36,8 +38,8 @@ class OfflineEvaluator:
             # Check constraints
             lengths = np.array([len(x) for x in self.test_targets], dtype=int)
             if np.any(lengths != 1):
-                print(
-                    f"Error: Sampled evaluation requires exactly 1 interaction per user. Found max {lengths.max()}."
+                logger.error(
+                    f"Sampled evaluation requires exactly 1 interaction per user. Found max {lengths.max()}."
                 )
                 sys.exit(1)
 
@@ -55,7 +57,8 @@ class OfflineEvaluator:
         self.item_popularity = None
 
     def _prepare_sampled_candidates(self):
-        print(
+        logger = get_logger()
+        logger.info(
             f"Preparing sampled candidates (1 positive + 100 negatives) using {self.sample_strategy} sampling..."
         )
         # Ensure we have all positives loaded
@@ -85,7 +88,7 @@ class OfflineEvaluator:
 
         # Check if we need popularity probs
         if any(s == "popularity" for s, _ in strategies):
-            print("Computing item probabilities for sampling...")
+            logger.info("Computing item probabilities for sampling...")
             probs_tensor = compute_item_probabilities(
                 self.n_items, return_log_probs=False, smooth=False
             )
@@ -99,7 +102,7 @@ class OfflineEvaluator:
 
         for strategy_name, _ in strategies:
             if strategy_name not in pools:
-                print(f"Generating initial pool for '{strategy_name}'...")
+                logger.info(f"Generating initial pool for '{strategy_name}'...")
                 if strategy_name == "uniform":
                     pools[strategy_name] = np.random.randint(
                         0, self.n_items, size=est_pool_size
@@ -110,7 +113,7 @@ class OfflineEvaluator:
                     )
                 pool_indices[strategy_name] = 0
 
-        print("Assigning negatives...")
+        logger.info("Assigning negatives...")
         for i, u_idx in tqdm(enumerate(self.test_users), total=n_samples):
             u_pos = all_positives.get(u_idx, set())
 
@@ -129,7 +132,7 @@ class OfflineEvaluator:
 
                     # Refill check
                     if idx + chunk_size >= len(pool):
-                        print(f"Refilling '{strategy_name}' pool...")
+                        logger.info(f"Refilling '{strategy_name}' pool...")
                         refill_size = est_pool_size // 10
                         if strategy_name == "uniform":
                             new_pool = np.random.randint(
@@ -159,11 +162,12 @@ class OfflineEvaluator:
             candidates[i, 1:] = current_user_negs
 
         self.test_candidates = torch.from_numpy(candidates).long().to(self.device)
-        print(f"Candidates prepared: {self.test_candidates.shape}")
+        logger.info(f"Candidates prepared: {self.test_candidates.shape}")
 
     def _load_test_data(self):
         """Load and filter test data."""
-        print("Loading test splits...")
+        logger = get_logger()
+        logger.info("Loading test splits...")
         test_df = pd.read_parquet(settings.processed_data_dir / "test.parquet")
         test_df = test_df[test_df["rating"] >= settings.retrieval_threshold]
 
@@ -173,7 +177,8 @@ class OfflineEvaluator:
 
     def _load_embeddings(self):
         """Load pre-computed embeddings from disk."""
-        print("Loading embeddings from disk...")
+        logger = get_logger()
+        logger.info("Loading embeddings from disk...")
         u_path = settings.artifacts_dir / "user_embeddings.npy"
         i_path = settings.artifacts_dir / "item_embeddings.npy"
 
@@ -190,11 +195,14 @@ class OfflineEvaluator:
         self.item_embs = (
             torch.from_numpy(np.load(i_path).copy()).to(self.device).float()
         )
-        print(f"Loaded Users: {self.user_embs.shape}, Items: {self.item_embs.shape}")
+        logger.info(
+            f"Loaded Users: {self.user_embs.shape}, Items: {self.item_embs.shape}"
+        )
 
     def _load_ranker(self):
         """Load Ranker model and Metadata."""
-        print("Loading Ranker Model and Metadata...")
+        logger = get_logger()
+        logger.info("Loading Ranker Model and Metadata...")
 
         # 1. Metadata
         item_map_path = settings.processed_data_dir / "item_map.npy"
@@ -215,7 +223,7 @@ class OfflineEvaluator:
         # 2.1 Load Popularity Stats (if available)
         pop_stats_path = settings.artifacts_dir / "ranker_pop_stats.pt"
         if pop_stats_path.exists():
-            print("Loading Popularity Stats...")
+            logger.info("Loading Popularity Stats...")
             stats = torch.load(pop_stats_path)
             self.pop_mean = stats["mean"]
             self.pop_std = stats["std"]

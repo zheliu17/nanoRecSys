@@ -6,6 +6,7 @@ from tqdm import tqdm
 from nanoRecSys.config import settings
 from nanoRecSys.models.towers import UserTower, ItemTower
 from nanoRecSys.utils.utils import get_vocab_sizes
+from nanoRecSys.utils.logging_config import get_logger
 
 
 def generate_embeddings(
@@ -23,7 +24,8 @@ def generate_embeddings(
 
     all_embeddings = []
 
-    print(f"Generating {description} for {vocab_size} items...")
+    logger = get_logger()
+    logger.info(f"Generating {description} for {vocab_size} items...")
 
     with torch.no_grad():
         for i in tqdm(range(0, vocab_size, batch_size)):
@@ -36,8 +38,8 @@ def generate_embeddings(
     embeddings = np.concatenate(all_embeddings, axis=0)
 
     # Verify shape and normalization
-    print(f"Embeddings shape: {embeddings.shape}")
-    print(
+    logger.info(f"Embeddings shape: {embeddings.shape}")
+    logger.info(
         f"Sample embedding norms (should be ~1.0): {np.linalg.norm(embeddings[:5], axis=1)}"
     )
 
@@ -66,16 +68,17 @@ def build_item_embeddings(
         device = "cuda" if torch.cuda.is_available() else "cpu"
 
     device = torch.device(device)
-    print(f"Using device: {device}")
+    logger = get_logger()
+    logger.info(f"Using device: {device}")
 
     # Get vocabulary sizes
     n_users, n_items = get_vocab_sizes()
-    print(f"Vocab: Users={n_users}, Items={n_items}")
+    logger.info(f"Vocab: Users={n_users}, Items={n_items}")
 
     item_tower = model
     if item_tower is None:
         # Load trained ItemTower model
-        print("Loading trained ItemTower model...")
+        logger.info("Loading trained ItemTower model...")
         item_tower = ItemTower(
             n_items,
             embed_dim=settings.embed_dim,
@@ -87,8 +90,8 @@ def build_item_embeddings(
         try:
             item_tower.load_state_dict(torch.load(model_path, map_location=device))
         except FileNotFoundError:
-            print(f"Error: Model checkpoint not found at {model_path}")
-            print("Please run train.py first to train the model.")
+            logger.error(f"Model checkpoint not found at {model_path}")
+            logger.error("Please run train.py first to train the model.")
             return None
 
     embeddings = generate_embeddings(
@@ -125,16 +128,17 @@ def build_user_embeddings(
         device = "cuda" if torch.cuda.is_available() else "cpu"
 
     device = torch.device(device)
-    print(f"Using device: {device}")
+    logger = get_logger()
+    logger.info(f"Using device: {device}")
 
     # Get vocabulary sizes
     n_users, n_items = get_vocab_sizes()
-    print(f"Vocab: Users={n_users}, Items={n_items}")
+    logger.info(f"Vocab: Users={n_users}, Items={n_items}")
 
     user_tower = model
     if user_tower is None:
         # Load trained UserTower model
-        print("Loading trained UserTower model...")
+        logger.info("Loading trained UserTower model...")
         user_tower = UserTower(
             n_users,
             embed_dim=settings.embed_dim,
@@ -146,8 +150,8 @@ def build_user_embeddings(
         try:
             user_tower.load_state_dict(torch.load(model_path, map_location=device))
         except FileNotFoundError:
-            print(f"Error: Model checkpoint not found at {model_path}")
-            print("Please run train.py first to train the model.")
+            logger.error(f"Model checkpoint not found at {model_path}")
+            logger.error("Please run train.py first to train the model.")
             return None
 
     embeddings = generate_embeddings(
@@ -191,18 +195,19 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
+    logger = get_logger()
     if args.mode in ["items", "all"]:
-        print("=" * 60)
-        print("Building Item Embeddings")
-        print("=" * 60)
+        logger.info("=" * 60)
+        logger.info("Building Item Embeddings")
+        logger.info("=" * 60)
         build_item_embeddings(batch_size=args.batch_size, device=args.device)
 
     if args.mode in ["users", "all"]:
-        print("\n" + "=" * 60)
-        print("Building User Embeddings")
-        print("=" * 60)
+        logger.info("\n" + "=" * 60)
+        logger.info("Building User Embeddings")
+        logger.info("=" * 60)
         build_user_embeddings(batch_size=args.batch_size, device=args.device)
 
-    print("\n" + "=" * 60)
-    print("Done!")
-    print("=" * 60)
+    logger.info("\n" + "=" * 60)
+    logger.info("Done!")
+    logger.info("=" * 60)

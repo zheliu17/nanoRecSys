@@ -111,7 +111,7 @@ def mine_hard_negatives_for_split(
     n_items = item_embeddings.shape[0]
     hard_negatives = np.zeros(len(df), dtype=np.int32)
 
-    print(f"Assigning hard negatives to {len(df)} interactions...")
+    logger.info(f"Assigning hard negatives to {len(df)} interactions...")
     user_pos_indices = df.groupby("user_idx").indices
 
     for u_idx, indices in tqdm(user_pos_indices.items()):

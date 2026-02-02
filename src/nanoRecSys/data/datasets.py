@@ -5,6 +5,7 @@ import os
 import re
 from torch.utils.data import Dataset
 from typing import Optional
+from nanoRecSys.utils.logging_config import get_logger
 
 
 def load_item_metadata(item_map_path, movies_path, cache_dir=None):
@@ -26,7 +27,8 @@ def load_item_metadata(item_map_path, movies_path, cache_dir=None):
         g_path = os.path.join(cache_dir, "genre_matrix_binned.npy")
         y_path = os.path.join(cache_dir, "year_indices_binned.npy")
         if os.path.exists(g_path) and os.path.exists(y_path):
-            print("Loading cached metadata (binned)...")
+            logger = get_logger()
+            logger.info("Loading cached metadata (binned)...")
             g_mat = torch.from_numpy(np.load(g_path)).float()
             y_ind = torch.from_numpy(np.load(y_path)).long()
             # Inferred dimensions
@@ -76,7 +78,8 @@ def load_item_metadata(item_map_path, movies_path, cache_dir=None):
     genre_matrix = torch.zeros((num_items, num_genres), dtype=torch.float)
     year_indices = torch.zeros((num_items,), dtype=torch.long)
 
-    print("Building Genre (Multi-Hot) + Year (Binned) Metadata...")
+    logger = get_logger()
+    logger.info("Building Genre (Multi-Hot) + Year (Binned) Metadata...")
     for idx, raw_id in enumerate(item_map):
         # Genres
         g_str = movie_to_genres.get(raw_id, "")
@@ -252,7 +255,8 @@ class RankerTrainDataset(Dataset):
         random_neg_ratio: float,
     ):
         assert 0.0 <= random_neg_ratio <= 1.0, "random_neg_ratio must be in [0.0, 1.0]"
-        print("Building Ranker Training Dataset...")
+        logger = get_logger()
+        logger.info("Building Ranker Training Dataset...")
         data_blocks = []
 
         # 1. Interactions

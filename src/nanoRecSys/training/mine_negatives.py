@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 from nanoRecSys.config import settings
+from nanoRecSys.utils.logging_config import get_logger
 
 
 def load_all_positives() -> dict:
@@ -15,7 +16,8 @@ def load_all_positives() -> dict:
     Returns:
         dict: user_idx -> set of positive item_idxs
     """
-    print("Loading all interactions to build global positive sets...")
+    logger = get_logger()
+    logger.info("Loading all interactions to build global positive sets...")
 
     dfs = []
     splits = ["train", "val", "test"]
@@ -36,7 +38,7 @@ def load_all_positives() -> dict:
     full_df = pd.concat(dfs, ignore_index=True)
 
     # Group by user
-    print(f"Grouping {len(full_df)} positive interactions by user...")
+    logger.info(f"Grouping {len(full_df)} positive interactions by user...")
     user_positives = full_df.groupby("user_idx")["item_idx"].apply(set).to_dict()
 
     return user_positives
@@ -56,7 +58,8 @@ def mine_hard_negatives_for_split(
     """
     Mine hard negatives for a specific split.
     """
-    print(f"Mining hard negatives for {split_name} set...")
+    logger = get_logger()
+    logger.info(f"Mining hard negatives for {split_name} set...")
 
     # We need to process users present in this split
     # Since we need to assign a hard negative for EACH interaction,
@@ -67,7 +70,7 @@ def mine_hard_negatives_for_split(
     item_embs_tensor = torch.tensor(item_embeddings, device=device)
 
     # Process users in batches to find their top-k hard negatives
-    print(f"Retrieving candidates for {len(unique_users)} users...")
+    logger.info(f"Retrieving candidates for {len(unique_users)} users...")
 
     for i in tqdm(range(0, len(unique_users), batch_size)):
         batch_users = unique_users[i : i + batch_size]
@@ -142,7 +145,8 @@ def mine_random_negatives_for_split(
     """
     Mine random negatives for a specific split.
     """
-    print(
+    logger = get_logger()
+    logger.info(
         f"Mining {num_negatives} random negatives per interaction for {split_name}..."
     )
 
@@ -185,6 +189,7 @@ def mine_random_negatives_for_split(
 
 
 def main(top_k=None, skip_top=None, batch_size=None):
+    logger = get_logger()
     if top_k is None:
         top_k = settings.mining_top_k
     if skip_top is None:
@@ -193,18 +198,20 @@ def main(top_k=None, skip_top=None, batch_size=None):
         batch_size = settings.batch_size
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    print(f"Using device: {device}")
-    print(f"Parameters: batch_size={batch_size}, top_k={top_k}, skip_top={skip_top}")
+    logger.info(f"Using device: {device}")
+    logger.info(
+        f"Parameters: batch_size={batch_size}, top_k={top_k}, skip_top={skip_top}"
+    )
 
     # 1. Load item embeddings from disk
     item_emb_path = settings.artifacts_dir / "item_embeddings.npy"
     if not item_emb_path.exists():
-        print(f"Error: Item embeddings not found at {item_emb_path}")
-        print(
+        logger.error(f"Item embeddings not found at {item_emb_path}")
+        logger.error(
             "Please generate embeddings first using: python src/indexing/build_embeddings.py --mode items"
         )
         return
-    print("Loading item embeddings...")
+    logger.info("Loading item embeddings...")
     item_embeddings = np.load(item_emb_path)
 
     n_items = item_embeddings.shape[0]
@@ -212,12 +219,12 @@ def main(top_k=None, skip_top=None, batch_size=None):
     # 2. Load user embeddings from disk
     user_emb_path = settings.artifacts_dir / "user_embeddings.npy"
     if not user_emb_path.exists():
-        print(f"Error: User embeddings not found at {user_emb_path}")
-        print(
+        logger.error(f"User embeddings not found at {user_emb_path}")
+        logger.error(
             "Please generate embeddings first using: python src/indexing/build_embeddings.py --mode users"
         )
         return
-    print("Loading user embeddings...")
+    logger.info("Loading user embeddings...")
     user_embeddings = np.load(user_emb_path)
 
     # 3. Load Global Positives
@@ -227,15 +234,15 @@ def main(top_k=None, skip_top=None, batch_size=None):
     for split in ["train", "val"]:
         path = settings.processed_data_dir / f"{split}.parquet"
         if not path.exists():
-            print(f"Skipping {split}, file not found.")
+            logger.info(f"Skipping {split}, file not found.")
             continue
 
-        print(f"\nProcessing {split} split...")
+        logger.info(f"Processing {split} split...")
         df = pd.read_parquet(path)
 
         # Filter for positive interactions only
         df_pos = df[df["rating"] >= settings.ranker_positive_threshold].copy()
-        print(f"Found {len(df_pos)} positive interactions in {split}.")
+        logger.info(f"Found {len(df_pos)} positive interactions in {split}.")
 
         # 4. Mine Hard Negatives
         hard_negs = mine_hard_negatives_for_split(

@@ -18,6 +18,7 @@ from nanoRecSys.data.datasets import (
     load_item_metadata,
 )
 from nanoRecSys.models.ranker import RankerModel
+from nanoRecSys.utils.logging_config import get_logger
 from nanoRecSys.models.losses import get_ranker_loss
 from nanoRecSys.utils.utils import (
     compute_item_probabilities,
@@ -274,60 +275,61 @@ class RankerPL(pl.LightningModule):
 
 
 def train_ranker(args, vocab_sizes):
+    logger = get_logger()
     num_workers = getattr(args, "num_workers", 0)
     n_users, n_items = vocab_sizes
-    print(f"Initializing Ranker Training (Users: {n_users}, Items: {n_items})")
+    logger.info(f"Initializing Ranker Training (Users: {n_users}, Items: {n_items})")
 
     # 1. Load Embeddings from Disk
-    print("Checking for pre-computed user/item embeddings...")
+    logger.info("Checking for pre-computed user/item embeddings...")
     user_emb_path = settings.artifacts_dir / "user_embeddings.npy"
     item_emb_path = settings.artifacts_dir / "item_embeddings.npy"
 
     # Check User Embeddings
     if not user_emb_path.exists():
-        print(f"Error: User embeddings not found at {user_emb_path}")
-        print(
+        logger.error(f"User embeddings not found at {user_emb_path}")
+        logger.error(
             "Please generate embeddings first using: python src/indexing/build_embeddings.py --mode users"
         )
         return
 
     # Check Item Embeddings
     if not item_emb_path.exists():
-        print(f"Error: Item embeddings not found at {item_emb_path}")
-        print(
+        logger.error(f"Item embeddings not found at {item_emb_path}")
+        logger.error(
             "Please generate embeddings first using: python src/indexing/build_embeddings.py --mode items"
         )
         return
 
-    print("Loading embeddings from disk...")
+    logger.info("Loading embeddings from disk...")
     # Load as numpy then convert to tensor
     try:
         user_embeddings = torch.from_numpy(np.load(user_emb_path))
         item_embeddings = torch.from_numpy(np.load(item_emb_path))
-        print(
+        logger.info(
             f"Loaded User Embeddings: {user_embeddings.shape}, Item Embeddings: {item_embeddings.shape}"
         )
     except Exception as e:
-        print(f"Error loading embeddings: {e}")
+        logger.error(f"Error loading embeddings: {e}")
         return
 
     # 3. Build/Load Metadata
     item_map_path = settings.processed_data_dir / "item_map.npy"
     movies_path = settings.raw_data_dir / "movies.csv"
 
-    print("Loading Item Metadata (Genres + Years)...")
+    logger.info("Loading Item Metadata (Genres + Years)...")
     genre_matrix, year_indices, num_genres, num_years = load_item_metadata(
         item_map_path, movies_path, cache_dir=str(settings.processed_data_dir)
     )
 
-    print("Computing Item Popularity...")
+    logger.info("Computing Item Popularity...")
     # Use log probability for better numerical stability in neural nets
     item_popularity = compute_item_probabilities(
         n_items, return_log_probs=True, device="cpu"
     )
 
     # 4. Data
-    print("Loading training data for Ranker...")
+    logger.info("Loading training data for Ranker...")
     train_dataset = RankerTrainDataset(
         interactions_path=str(settings.processed_data_dir / "train.parquet"),
         hard_neg_path=str(settings.processed_data_dir / "train_negatives_hard.parquet"),
@@ -434,12 +436,12 @@ def train_ranker(args, vocab_sizes):
     # Normalize Popularity Stats Calculation
     pop_mean = item_popularity.mean()
     pop_std = item_popularity.std()
-    print(f"Popularity Stats -- Mean: {pop_mean:.4f}, Std: {pop_std:.4f}")
+    logger.info(f"Popularity Stats -- Mean: {pop_mean:.4f}, Std: {pop_std:.4f}")
 
     if args.item_lr > 0:
-        print(f"Item Embeddings will be FINE-TUNED (LR={args.item_lr}).")
+        logger.info(f"Item Embeddings will be FINE-TUNED (LR={args.item_lr}).")
     else:
-        print("Item Embeddings will be FROZEN (LR=0).")
+        logger.info("Item Embeddings will be FROZEN (LR=0).")
 
     model = RankerPL(
         embed_dim=settings.tower_out_dim,
@@ -513,4 +515,6 @@ def train_ranker(args, vocab_sizes):
     # Save Popularity Stats
     pop_stats = {"mean": model.pop_mean.cpu().item(), "std": model.pop_std.cpu().item()}  # type: ignore
     torch.save(pop_stats, settings.artifacts_dir / "ranker_pop_stats.pt")
-    print("Saved ranker_model.pth, ranker_item_embeddings.pt, ranker_pop_stats.pt")
+    logger.info(
+        "Saved ranker_model.pth, ranker_item_embeddings.pt, ranker_pop_stats.pt"
+    )

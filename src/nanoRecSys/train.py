@@ -2,6 +2,7 @@ import argparse
 from nanoRecSys.config import settings
 from nanoRecSys.training import train_retriever, train_ranker
 from nanoRecSys.utils.utils import get_vocab_sizes
+from nanoRecSys.utils.logging_config import setup_logger
 
 
 def optional_float(v):
@@ -11,6 +12,9 @@ def optional_float(v):
 
 
 def main(args=None):
+    # Set up logging
+    logger = setup_logger()
+
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--mode", type=str, choices=["retriever", "ranker"], default="retriever"
@@ -163,7 +167,7 @@ def main(args=None):
         args = argparse.Namespace(**final_dict)
 
     vocab_sizes = get_vocab_sizes()
-    print(f"Vocab sizes: Users={vocab_sizes[0]}, Items={vocab_sizes[1]}")
+    logger.info(f"Vocab sizes: Users={vocab_sizes[0]}, Items={vocab_sizes[1]}")
 
     if args.mode == "retriever":
         train_retriever(args, vocab_sizes)

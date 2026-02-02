@@ -13,6 +13,7 @@ from torch.optim.lr_scheduler import LambdaLR
 
 from nanoRecSys.config import settings
 from nanoRecSys.data.datasets import InteractionsDataset, UniqueUserDataset
+from nanoRecSys.utils.logging_config import get_logger
 from nanoRecSys.models.towers import TwoTowerModel, UserTower, ItemTower
 from nanoRecSys.models.losses import InfoNCELoss
 from nanoRecSys.eval.metrics import recall_at_k
@@ -232,21 +233,22 @@ class RetrievalPL(pl.LightningModule):
 
 
 def train_retriever(args, vocab_sizes):
+    logger = get_logger()
     num_workers = getattr(args, "num_workers", 0)
     n_users, n_items = vocab_sizes
-    print(f"Initializing Retriever Training (Users: {n_users}, Items: {n_items})")
+    logger.info(f"Initializing Retriever Training (Users: {n_users}, Items: {n_items})")
 
     # 1. Data
     train_path = settings.processed_data_dir / "train.parquet"
     val_path = settings.processed_data_dir / "val.parquet"
 
-    print("Loading training data...")
+    logger.info("Loading training data...")
     df_train = pd.read_parquet(train_path)
     if args.retrieval_threshold is not None:
         df_train = df_train[df_train["rating"] >= args.retrieval_threshold]
 
     # Calculate item popularity for LogQ correction
-    print("Calculating item popularity...")
+    logger.info("Calculating item popularity...")
     item_probs = compute_item_probabilities(n_items)
 
     # Data Source Toggle
@@ -262,7 +264,7 @@ def train_retriever(args, vocab_sizes):
         del df_train
         train_dataset = UniqueUserDataset(user_histories)
 
-    print("Loading validaton data for metrics...")
+    logger.info("Loading validaton data for metrics...")
     df_val = pd.read_parquet(val_path)
     if args.retrieval_threshold is not None:
         df_val = df_val[df_val["rating"] >= args.retrieval_threshold]
@@ -358,12 +360,12 @@ def train_retriever(args, vocab_sizes):
     wandb.finish()
 
     # Save artifacts manually for inference usage
-    print("Saving Retriever artifacts...")
+    logger.info("Saving Retriever artifacts...")
     torch.save(model.user_tower.state_dict(), settings.artifacts_dir / "user_tower.pth")
     torch.save(model.item_tower.state_dict(), settings.artifacts_dir / "item_tower.pth")
 
     if getattr(args, "build_embeddings", False):
-        print("Generating embeddings from trained model...")
+        logger.info("Generating embeddings from trained model...")
         from nanoRecSys.indexing.build_embeddings import (
             build_item_embeddings,
             build_user_embeddings,

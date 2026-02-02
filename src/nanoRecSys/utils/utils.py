@@ -4,6 +4,7 @@ import numpy as np
 import torch
 import pandas as pd
 from nanoRecSys.config import settings
+from nanoRecSys.utils.logging_config import get_logger
 
 
 def get_vocab_sizes():
@@ -36,7 +37,8 @@ def compute_item_probabilities(
     Returns:
         torch.Tensor
     """
-    print("Loading training data to compute item probabilities...")
+    logger = get_logger()
+    logger.info("Loading training data to compute item probabilities...")
     train_df = pd.read_parquet(settings.processed_data_dir / "train.parquet")
 
     # Calculate item counts

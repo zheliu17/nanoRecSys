@@ -36,21 +36,14 @@ We employ two evaluation strategies to validate model performance:
 
 *For detailed latency analysis and load testing results, see [Benchmark.md](./notebooks/Benchmark.md)*
 
-## Project Structure
-```text
-.
-├── artifacts/             # Trained models & indices (GitIgnored)
-├── data/                  # Dataset storage
-├── frontend/              # Streamlit UI
-├── notebooks/             # Training & Analysis Notebooks
-├── serving/               # FastAPI Inference Server
-├── src/
-│   └── nanoRecSys/        # Core Library
-├── tests/                 # Unit & Integration Tests
-└── docker-compose.yml     # Orchestration
-```
-
 ## Quick Start
+
+> **Fast Track:** We provide a `Makefile` to simplify common tasks.
+> ```bash
+> make install        # Install dependencies
+> make train-all      # Run full data & training pipeline
+> make serve          # Start the application
+> ```
 
 ### 1. Installation
 ```bash
@@ -75,4 +68,47 @@ docker-compose up --build
 Run unit and integration tests:
 ```bash
 pytest tests/
+```
+
+
+## System Architecture
+
+```mermaid
+graph TD
+    User([User / Client]) -->|HTTP Request| API[FastAPI Gateway]
+
+    subgraph "Serving Layer"
+        API -->|1. Check Cache| Redis[(Redis Cache)]
+        Redis -- Cache Hit --> API
+        Redis -- Cache Miss --> Retrieval
+
+        subgraph "Inference Pipeline"
+            Retrieval[Retrieval Service] -->|2. Encode Query| QueryEnc[Query Tower]
+            QueryEnc -->|3. Vector Search| FAISS[(FAISS Index)]
+            FAISS -->|4. Candidates| Reranker[Cross-Encoder Ranker]
+            Reranker -->|5. Top-K Items| Redis
+        end
+    end
+
+    subgraph "Offline Training"
+        Data[(MovieLens Data)] --> Trainer[Training Pipeline]
+        Trainer -->|Updates| QueryEnc
+        Trainer -->|Updates| Reranker
+        Trainer -->|Builds| FAISS
+    end
+```
+
+
+## Project Structure
+```text
+.
+├── artifacts/             # Trained models & indices (GitIgnored)
+├── data/                  # Dataset storage
+├── frontend/              # Streamlit UI
+├── notebooks/             # Training & Analysis Notebooks
+├── serving/               # FastAPI Inference Server
+├── src/
+│   └── nanoRecSys/        # Core Library
+├── tests/                 # Unit & Integration Tests
+└── docker-compose.yml     # Orchestration
 ```

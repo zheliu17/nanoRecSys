@@ -268,7 +268,7 @@ class RankerTrainDataset(Dataset):
         if b_pos is not None:
             data_blocks.append(b_pos)
             if pos_data is not None:
-                print(f"  - Loaded {pos_data.shape[0]} positives")
+                logger.info(f"  - Loaded {pos_data.shape[0]} positives")
 
         if explicit_neg_weight > 0.0:
             b_exp = _make_block(
@@ -276,12 +276,12 @@ class RankerTrainDataset(Dataset):
             )
         else:
             b_exp = None
-            print("  - Skipping explicit negatives (weight=0)")
+            logger.info("  - Skipping explicit negatives (weight=0)")
 
         if b_exp is not None:
             data_blocks.append(b_exp)
             if exp_neg_data is not None:
-                print(
+                logger.info(
                     f"  - Loaded {exp_neg_data.shape[0]} explicit negatives (weight={explicit_neg_weight})"
                 )
 
@@ -291,7 +291,7 @@ class RankerTrainDataset(Dataset):
         if b_hard is not None:
             data_blocks.append(b_hard)
             if hard_data is not None:
-                print(f"  - Loaded {hard_data.shape[0]} hard negatives")
+                logger.info(f"  - Loaded {hard_data.shape[0]} hard negatives")
 
         # 3. Random Negatives
         assert 0.0 <= random_neg_ratio <= 1.0, "random_neg_ratio must be in [0.0, 1.0]"
@@ -300,7 +300,7 @@ class RankerTrainDataset(Dataset):
             if rand_data is not None:
                 if random_neg_ratio < 1.0:
                     n_keep = int(len(rand_data) * random_neg_ratio)
-                    print(
+                    logger.info(
                         f"  - Subsampling random negatives: {random_neg_ratio:.2f} ({n_keep}/{len(rand_data)})"
                     )
                     # Random sampling without replacement
@@ -312,9 +312,9 @@ class RankerTrainDataset(Dataset):
                 )
                 if b_rand is not None:
                     data_blocks.append(b_rand)
-                    print(f"  - Loaded {rand_data.shape[0]} random negatives")
+                    logger.info(f"  - Loaded {rand_data.shape[0]} random negatives")
         else:
-            print("  - Skipping random negatives (ratio=0)")
+            logger.info("  - Skipping random negatives (ratio=0)")
 
         if not data_blocks:
             raise ValueError("No training data found!")
@@ -326,7 +326,7 @@ class RankerTrainDataset(Dataset):
         self.labels = full_data[:, 2].astype(np.float32)
         self.weights = full_data[:, 3].astype(np.float32)
 
-        print(f"Total Ranker Training Samples: {len(self.users)}")
+        logger.info(f"Total Ranker Training Samples: {len(self.users)}")
 
     def __len__(self):
         return len(self.users)
@@ -353,6 +353,7 @@ class RankerEvalDataset(Dataset):
         pos_threshold: float,
         neg_threshold: Optional[float] = None,
     ):
+        logger = get_logger()
         data_blocks = []
 
         # 1. Positives (Always loaded)
@@ -376,7 +377,7 @@ class RankerEvalDataset(Dataset):
         elif mode == "random":
             neg_data = _load_random_negatives_data(negatives_path)
         else:
-            print(f"Warning: Unknown mode {mode}")
+            logger.warning(f"Unknown mode {mode}")
 
         b_neg = _make_block(neg_data, label=0.0, weight=1.0, return_weight=False)
         if b_neg is not None:
@@ -384,7 +385,7 @@ class RankerEvalDataset(Dataset):
         elif (
             mode != "explicit" and negatives_path
         ):  # Warn if path provided but data empty/missing
-            print(f"Warning: No negatives loaded from {negatives_path} for mode {mode}")
+            logger.warning(f"No negatives loaded from {negatives_path} for mode {mode}")
 
         if data_blocks:
             full_data = np.vstack(data_blocks)
@@ -397,7 +398,7 @@ class RankerEvalDataset(Dataset):
         self.items = full_data[:, 1].astype(np.int64)
         self.labels = full_data[:, 2].astype(np.float32)
 
-        print(f"Ranker Eval Dataset ({mode}): {len(self.users)} samples")
+        logger.info(f"Ranker Eval Dataset ({mode}): {len(self.users)} samples")
 
     def __len__(self):
         return len(self.users)

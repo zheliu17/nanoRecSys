@@ -25,13 +25,15 @@ class FaissStore:
         logger.info(f"Loading FAISS index from {path}...")
         self.index = faiss.read_index(str(path))
 
-    def search(self, user_emb: torch.Tensor, k: int = 100):
-        # user_emb: (1, dim) torch tensor or numpy
+    def search(self, user_emb: torch.Tensor, k: int = 100, nprobe: int = 8):
         if self.index is None:
             return [], []
 
         if isinstance(user_emb, torch.Tensor):
             user_emb = user_emb.detach().cpu().numpy()  # type: ignore
+
+        if hasattr(self.index, "nprobe"):
+            self.index.nprobe = nprobe
 
         distances, indices = self.index.search(user_emb, k)
         return indices[0], distances[0]

@@ -210,8 +210,8 @@ class RecommendationService:
         timings = {}
 
         # 1. Check Redis Cache
-        # Include history in key to differentiate responses
-        cache_key = f"user:{user_id}:k:{k}:h:{int(include_history)}"
+        # Include history and explain in key to differentiate responses
+        cache_key = f"user:{user_id}:k:{k}:h:{int(include_history)}:e:{int(explain)}"
         cached = self.cache.get(cache_key)
         if cached:
             # Add basic timing info for cache hit

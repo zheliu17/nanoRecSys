@@ -62,6 +62,10 @@ class OfflineEvaluator:
             f"Preparing sampled candidates (1 positive + 100 negatives) using {self.sample_strategy} sampling..."
         )
         # Ensure we have all positives loaded
+        logger.warning(
+            f"Filtering known positives based on ranker_positive_threshold ({settings.ranker_positive_threshold}). "
+            "If you want to adjust what is considered a positive for exclusion, change ranker_positive_threshold."
+        )
         all_positives = load_all_positives()
 
         n_neg = 100

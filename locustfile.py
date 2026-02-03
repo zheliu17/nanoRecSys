@@ -53,6 +53,14 @@ class RecSysUser(HttpUser):
                                 response_length=0,
                                 exception=None,
                             )
+                        if "total" in timings:
+                            events.request.fire(
+                                request_type="DB",
+                                name="Server_Processing",
+                                response_time=timings["total"],
+                                response_length=0,
+                                exception=None,
+                            )
                 except Exception as e:
                     print(f"Error parsing timing: {e}")
             else:

@@ -40,8 +40,8 @@ We employ two evaluation strategies to validate model performance:
 
 > **Fast Track:** We provide a `Makefile` to simplify common tasks.
 > ```bash
-> make install        # Install dependencies
-> make train-all      # Run full data & training pipeline
+> make install        # (Equivalent to pip install -e .)
+> make train-all      # Run full data, training, and indexing pipeline
 > make serve          # Start the application
 > ```
 
@@ -61,6 +61,7 @@ See [Training.md](./notebooks/Training.md) for detailed steps. You need to run t
 ### 3. Serving
 Once artifacts are generated, launch the full stack (API, Cache, Frontend):
 ```bash
+# python -m nanoRecSys.indexing.build_faiss_ivfpq --nlist 64 --m 16
 docker-compose up --build
 ```
 

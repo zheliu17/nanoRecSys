@@ -318,4 +318,27 @@ def main(top_k=None, skip_top=None, batch_size=None):
 
 
 if __name__ == "__main__":
-    main()
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Mine Hard Negatives using Trained Retriever"
+    )
+    parser.add_argument(
+        "--batch_size", type=int, default=1024, help="Batch size for mining"
+    )
+    parser.add_argument(
+        "--top_k",
+        type=int,
+        default=settings.mining_top_k,
+        help="Number of hard negatives to mine",
+    )
+    parser.add_argument(
+        "--skip_top",
+        type=int,
+        default=settings.mining_skip_top,
+        help="Number of top items to skip",
+    )
+
+    args = parser.parse_args()
+
+    main(batch_size=args.batch_size, top_k=args.top_k, skip_top=args.skip_top)

@@ -1,3 +1,6 @@
+[![CI Pipeline](https://github.com/zheliu17/nanoRecSys/actions/workflows/ci.yml/badge.svg)](https://github.com/zheliu17/nanoRecSys/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://www.apache.org/licenses/LICENSE-2.0)
+
 # nanoRecSys: End-to-End Production Recommender System
 
 nanoRecSys is a full-lifecycle recommendation system implementation designed to mimic real-world production constraints. It implements a **two-stage pipeline (Retrieval & Ranking)** and includes a high-throughput **serving engine** backed by Redis and FAISS.

@@ -32,8 +32,28 @@ logger = logging.getLogger(__name__)
 RETRIEVAL_K = 100  # Number of candidates
 
 
+def _is_truthy_env(name: str, default: str = "0") -> bool:
+    value = os.getenv(name, default).strip().lower()
+    return value in {"1", "true", "yes", "y", "on"}
+
+
 class RecommendationService:
     def __init__(self):
+        self.stub_mode = _is_truthy_env("NANORECSYS_STUB")
+        if self.stub_mode:
+            self.device = "cpu"
+            self.cache = RedisCache()
+            self.user_id_to_idx = {1: 0}
+            self.fallback_movie_ids = list(range(1, 1001))
+            self.fallback_scores = [
+                1.0 / (i + 1) for i in range(len(self.fallback_movie_ids))
+            ]
+            self.user_history = {0: [10, 20, 30]}
+            logger.warning(
+                "NANORECSYS_STUB=1 enabled: serving stub recommendations (no artifacts required)."
+            )
+            return
+
         self.device = "cpu"
         # Initialize Cache
         self.cache = RedisCache()
@@ -220,6 +240,17 @@ class RecommendationService:
         explain: bool = False,
         include_history: bool = False,
     ):
+        if getattr(self, "stub_mode", False):
+            limit = max(0, min(int(k), len(self.fallback_movie_ids)))
+            response = {
+                "movie_ids": self.fallback_movie_ids[:limit],
+                "scores": self.fallback_scores[:limit],
+                "explanations": ["Stub recommendation"] * limit if explain else None,
+                "debug_timing": {"source": "stub"},
+                "history": [10, 20, 30] if include_history else None,
+            }
+            return response
+
         t0 = time.time()
         timings = {}
 

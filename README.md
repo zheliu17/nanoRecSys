@@ -40,14 +40,14 @@ We employ two evaluation strategies to validate model performance:
 
 > **Fast Track:** We provide a `Makefile` to simplify common tasks.
 > ```bash
+> # export WANDB_MODE=offline
 > make install        # (Equivalent to pip install -e .)
 > make train-all      # Run full data, training, and indexing pipeline
-> make serve          # Start the application
+> make serve          # (Equivalent to docker-compose up --build)
 > ```
 
 ### 1. Installation
 ```bash
-# Clone the repository
 git clone https://github.com/zheliu17/nanoRecSys.git
 cd nanoRecSys
 

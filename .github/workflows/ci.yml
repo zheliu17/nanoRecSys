@@ -10,26 +10,25 @@ jobs:
   build-and-test:
     runs-on: ubuntu-latest
 
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
 
-    - name: Set up Python 3.14
+    - name: Set up Python
       uses: actions/setup-python@v5
       with:
-        python-version: "3.14"
+        python-version: ${{ matrix.python-version }}
 
     - name: Install uv
       uses: astral-sh/setup-uv@v5
       with:
         enable-cache: true
         cache-dependency-glob: "pyproject.toml"
-
-    - name: Create virtual environment
-      run: uv venv .venv
-
-    - name: Activate virtual environment
-      run: source .venv/bin/activate
 
     - name: Install dependencies
       run: uv pip install .
@@ -45,4 +44,4 @@ jobs:
       # This runs all tests in the 'tests/' folder
       # We ignore warnings to keep logs clean for now
       run: |
-        uv run pytest tests/ -m "not data" -v
+        NANORECSYS_STUB=1 uv run pytest tests/ -m "not data" -v

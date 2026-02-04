@@ -70,28 +70,42 @@ class RankerModel(nn.Module):
         year_idx,
         popularity,
         id_dropout_prob=0.0,
+        new_item_mask=None,
     ):
         """
-        user_emb: (B, input_dim)
-        item_emb: (B, input_dim)
-        genre_multihot: (B, num_genres)
-        year_idx: (B,)
-        popularity: (B, 1) or (B,)
+        Args:
+            user_emb: (B, input_dim)
+            item_emb: (B, input_dim)
+            genre_multihot: (B, num_genres)
+            year_idx: (B,)
+            popularity: (B, 1) or (B,)
+            id_dropout_prob: float, probability of masking item embedding during training (for cold-start simulation)
+            new_item_mask: (B, 1) or (B,), binary mask where 1 indicates new/unknown items.
+                Overrides id_dropout_prob if provided. Used for evaluation with new items.
         """
         batch_size = user_emb.shape[0]
         device = user_emb.device
 
-        # Drop only Item Embedding (simulating Cold Start)
-        mask = torch.ones((batch_size, 1), device=device)
-        is_unknown_item = torch.zeros((batch_size, 1), device=device)
+        # Handle new items: explicit mask takes priority
+        if new_item_mask is not None:
+            # Convert to proper shape if needed
+            if new_item_mask.dim() == 1:
+                new_item_mask = new_item_mask.unsqueeze(1)
+            # new_item_mask is 1 for unknown items, 0 for known items
+            # mask is 1 for known items, 0 for unknown items (inverse)
+            mask = 1.0 - new_item_mask
+            is_unknown_item = new_item_mask.float()
+        else:
+            # Training-time cold-start simulation via dropout
+            mask = torch.ones((batch_size, 1), device=device)
+            is_unknown_item = torch.zeros((batch_size, 1), device=device)
 
-        if self.training and id_dropout_prob > 0.0:
-            mask = torch.bernoulli(
-                torch.full((batch_size, 1), 1.0 - id_dropout_prob, device=device)
-            )
-            is_unknown_item = 1.0 - mask
+            if self.training and id_dropout_prob > 0.0:
+                mask = torch.bernoulli(
+                    torch.full((batch_size, 1), 1.0 - id_dropout_prob, device=device)
+                )
+                is_unknown_item = 1.0 - mask
 
-        # Apply dropout to Item only
         i_emb_masked = item_emb * mask
 
         # Element-wise product (with MASKED item)
@@ -138,8 +152,13 @@ class RankerModel(nn.Module):
         genre_multihot,
         year_idx,
         popularity,
+        new_item_mask=None,
     ):
-        """Helper for inference producing probabilities."""
+        """Helper for inference producing probabilities.
+
+        Args:
+            new_item_mask: (B, 1) or (B,), binary mask where 1 indicates new/unknown items
+        """
         logits = self.forward(
             user_emb,
             item_emb,
@@ -147,5 +166,6 @@ class RankerModel(nn.Module):
             year_idx,
             popularity,
             id_dropout_prob=0.0,
+            new_item_mask=new_item_mask,
         )
         return torch.sigmoid(logits)

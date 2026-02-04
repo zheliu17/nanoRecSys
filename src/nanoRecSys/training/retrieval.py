@@ -105,7 +105,9 @@ class RetrievalPL(pl.LightningModule):
         if hasattr(self, "item_probs") and self.item_probs is not None:
             batch_probs = getattr(self, "item_probs")[items]
 
-        loss = self.criterion(u_emb, i_emb, candidate_probs=batch_probs, user_ids=users)
+        loss = self.criterion(
+            u_emb, i_emb, candidate_probs=batch_probs, user_ids=users, item_ids=items
+        )
         self.log("train_loss", loss, prog_bar=True, on_step=True, on_epoch=True)
         return loss
 
@@ -173,7 +175,9 @@ class RetrievalPL(pl.LightningModule):
         ):
             batch_probs = self.item_probs[items]
 
-        loss = self.criterion(u_emb, i_emb, candidate_probs=batch_probs)
+        loss = self.criterion(
+            u_emb, i_emb, candidate_probs=batch_probs, user_ids=users, item_ids=items
+        )
         self.log("val_loss", loss, prog_bar=True, on_step=False, on_epoch=True)
 
         # Metrics

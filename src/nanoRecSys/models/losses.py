@@ -34,6 +34,7 @@ class InfoNCELoss(nn.Module):
         item_embeddings: torch.Tensor,
         candidate_probs: "Optional[torch.Tensor]" = None,
         user_ids: "Optional[torch.Tensor]" = None,
+        item_ids: "Optional[torch.Tensor]" = None,
     ) -> torch.Tensor:
         """
         Args:
@@ -41,16 +42,23 @@ class InfoNCELoss(nn.Module):
             item_embeddings: (batch_size, dim) - positive items corresponding to users
             candidate_probs: (batch_size, ) - probability of each item in the batch
             user_ids: (batch_size, ) - User IDs to mask collisions (same user in batch)
+            item_ids: (batch_size, ) - Item IDs to mask collisions (same item in batch)
         """
         # Cosine similarity (assuming embeddings are already specialized)
         # logits: (batch, batch)
         logits = torch.matmul(user_embeddings, item_embeddings.T) / self.temperature
         batch_size = user_embeddings.size(0)
+        identity_mask = torch.eye(batch_size, device=user_embeddings.device).bool()
 
         # Apply user collision masking if user_ids are provided
         if user_ids is not None:
             match_mask = user_ids.unsqueeze(1) == user_ids.unsqueeze(0)
-            identity_mask = torch.eye(batch_size, device=user_embeddings.device).bool()
+            collision_mask = match_mask & (~identity_mask)
+            logits = logits.masked_fill(collision_mask, -1e9)
+
+        # Apply item collision masking if item_ids are provided
+        if item_ids is not None:
+            match_mask = item_ids.unsqueeze(1) == item_ids.unsqueeze(0)
             collision_mask = match_mask & (~identity_mask)
             logits = logits.masked_fill(collision_mask, -1e9)
 

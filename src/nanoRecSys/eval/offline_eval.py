@@ -46,6 +46,9 @@ class OfflineEvaluator:
         self.n_users, self.n_items = get_vocab_sizes()
         logger.info(f"Vocab: Users={self.n_users}, Items={self.n_items}")
 
+        # Store logger for use in other methods
+        self.logger = logger
+
         self.test_users, self.test_targets = self._load_test_data()
 
         if self.sampled:
@@ -246,8 +249,8 @@ class OfflineEvaluator:
             self.pop_mean = stats["mean"]
             self.pop_std = stats["std"]
         else:
-            print(
-                "Warning: Pop stats not found. Ranker might expect normalized inputs."
+            self.logger.warning(
+                "Pop stats not found. Ranker might expect normalized inputs."
             )
             self.pop_mean = 0.0
             self.pop_std = 1.0
@@ -255,11 +258,11 @@ class OfflineEvaluator:
         # 2.2 Load Fine-Tuned Item Embeddings (if available)
         ft_item_path = settings.artifacts_dir / "ranker_item_embeddings.pt"
         if ft_item_path.exists():
-            print("Loading Fine-Tuned Item Embeddings for Ranker...")
+            self.logger.info("Loading Fine-Tuned Item Embeddings for Ranker...")
             self.ranker_item_embs = torch.load(ft_item_path, map_location=self.device)
         else:
-            print(
-                "Warning: Fine-tuned item embeddings not found, using base embeddings."
+            self.logger.warning(
+                "Fine-tuned item embeddings not found, using base embeddings."
             )
             self.ranker_item_embs = self.item_embs
 
@@ -291,12 +294,12 @@ class OfflineEvaluator:
             global_metrics[key] = global_metrics.get(key, 0.0) + v
 
     def eval_popularity(self):
-        print("Evaluating Popularity Baseline...")
+        self.logger.info("Evaluating Popularity Baseline...")
         train_df = pd.read_parquet(settings.processed_data_dir / "train.parquet")
         pop_counts = train_df["item_idx"].value_counts()
 
         if self.sampled:
-            print("Running Sampled Popularity Eval...")
+            self.logger.info("Running Sampled Popularity Eval...")
             # Create dense popularity vector
             pop_vector = np.zeros(self.n_items, dtype=float)
             if not pop_counts.empty:
@@ -345,7 +348,7 @@ class OfflineEvaluator:
 
         metrics_sum = {}
 
-        print("Scoring users (Retrieval)...")
+        self.logger.info("Scoring users (Retrieval)...")
         for i in tqdm(range(0, len(self.test_users), self.batch_size)):
             idx_end = i + self.batch_size
             batch_u_idx = self.test_users[i:idx_end]
@@ -396,8 +399,95 @@ class OfflineEvaluator:
 
         return {k: v / len(self.test_users) for k, v in metrics_sum.items()}
 
-    def eval_ranker(self):
-        """Evaluate Ranker (Re-rank Top-100 from Retrieval)."""
+    def _score_candidates_with_ranker(
+        self,
+        candidates,
+        batch_u_emb,
+        batch_targets,
+        new_item_mask=None,
+        prefix="Ranker_",
+        perturb_feature=None,
+    ):
+        """
+        Helper method to score candidates using the Ranker and accumulate metrics.
+
+        Args:
+            candidates: (B, k_cands) tensor of item indices
+            batch_u_emb: (B, input_dim) user embeddings
+            batch_targets: list of target items per user
+            new_item_mask: (B*k_cands, 1) optional mask for new items
+            prefix: prefix for metrics keys
+            perturb_feature: str, optional name of feature to shuffle ("genre", "year", "popularity")
+
+        Returns:
+            metrics_sum: dict of accumulated metrics
+        """
+        current_bs = batch_u_emb.shape[0]
+        k_cands = candidates.shape[1]
+        metrics_sum = {}
+
+        # Flatten for batch processing
+        flat_candidates = candidates.view(-1)  # (B*k_cands)
+
+        # Expand User embeddings
+        flat_u_emb = (
+            batch_u_emb.unsqueeze(1)
+            .expand(-1, k_cands, -1)
+            .reshape(-1, settings.tower_out_dim)
+        )
+
+        # Fetch Item Embeddings & Metadata
+        flat_i_emb = self.ranker_item_embs[flat_candidates]  # type: ignore
+        flat_genre = self.genre_matrix[flat_candidates]  # type: ignore
+        flat_year = self.year_indices[flat_candidates]  # type: ignore
+
+        # Normalize Popularity
+        raw_pop = self.item_popularity[flat_candidates]  # type: ignore
+        flat_pop = (raw_pop - self.pop_mean) / (self.pop_std + 1e-6)
+
+        # Apply perturbation for feature sensitivity analysis
+        if perturb_feature == "genre":
+            perm = torch.randperm(flat_genre.size(0), device=self.device)
+            flat_genre = flat_genre[perm]
+        elif perturb_feature == "year":
+            perm = torch.randperm(flat_year.size(0), device=self.device)
+            flat_year = flat_year[perm]
+        elif perturb_feature == "popularity":
+            perm = torch.randperm(flat_pop.size(0), device=self.device)
+            flat_pop = flat_pop[perm]
+
+        with torch.no_grad():
+            ranker_scores = self.ranker(
+                user_emb=flat_u_emb,
+                item_emb=flat_i_emb,
+                genre_multihot=flat_genre,
+                year_idx=flat_year,
+                popularity=flat_pop,
+                new_item_mask=new_item_mask,
+            )  # type: ignore
+
+        # Reshape scores to (B, k_cands)
+        ranker_scores = ranker_scores.view(current_bs, k_cands)
+
+        # Sort candidates by Ranker Score
+        _, sorted_local_indices = torch.topk(ranker_scores, k=self.max_k, dim=1)
+
+        # Map back to original Item IDs
+        final_preds = torch.gather(candidates, 1, sorted_local_indices).cpu().numpy()
+
+        # Record Ranker Metrics
+        res_ranker = self._batch_metrics(final_preds, batch_targets)
+        self._accumulate_metrics(metrics_sum, res_ranker, prefix=prefix)
+
+        return metrics_sum
+
+    def eval_ranker(self, new_items=False):
+        """
+        Evaluate Ranker (Re-rank Top-100 from Retrieval).
+
+        Args:
+            new_items: if True, treat all candidates as new items
+        """
         self._load_embeddings()
         self._load_ranker()
 
@@ -405,29 +495,27 @@ class OfflineEvaluator:
         assert retrieve_k >= self.max_k, "Retrieval K must be >= Evaluation K"
 
         metrics_sum = {}
+        prefix = "RankerNew_" if new_items else "Ranker_"
+        label = "New Items" if new_items else ""
 
-        print("Scoring users (Retrieval + Ranker)...")
+        self.logger.info(f"Scoring users (Retrieval + Ranker {label})...")
         for i in tqdm(range(0, len(self.test_users), self.batch_size)):
             idx_end = i + self.batch_size
             batch_u_idx = self.test_users[i:idx_end]
             batch_targets = self.test_targets[i:idx_end]
-            current_bs = len(batch_u_idx)
             batch_u_emb = self.user_embs[batch_u_idx]  # type: ignore
 
             if self.sampled:
                 candidates = self.test_candidates[i:idx_end]
-                k_cands = candidates.shape[1]
             else:
                 # --- A. Retrieval (LogQ) ---
                 scores = torch.matmul(batch_u_emb, self.item_embs.T)  # type: ignore
-                scores_logq = (scores / settings.temperature) + self.item_popularity  # type: ignore
+                scores = scores / settings.temperature  # No logQ corrections
 
                 # Get Top-100 Candidates
-                _, candidates = torch.topk(scores_logq, k=retrieve_k, dim=1)  # (B, 100)
-                k_cands = retrieve_k
+                _, candidates = torch.topk(scores, k=retrieve_k, dim=1)  # (B, 100)
 
                 # A1. Record Retrieval Metrics (for comparison)
-                # Take top max_k from the 100 candidates (since topk returns sorted, this is just slicing)
                 preds_retrieval = candidates[:, : self.max_k].cpu().numpy()
                 res_retrieval = self._batch_metrics(preds_retrieval, batch_targets)
                 self._accumulate_metrics(
@@ -435,51 +523,71 @@ class OfflineEvaluator:
                 )
 
             # --- B. Ranker Re-Ranking ---
-            # Flatten for batch processing
-            flat_candidates = candidates.view(-1)  # (B*100)
+            new_item_mask = None
+            if new_items:
+                # Mask all items as new
+                flat_size = candidates.view(-1).shape[0]
+                new_item_mask = torch.ones((flat_size, 1), device=self.device)
 
-            # Expand User embeddings: (B, Dim) -> (B, 100, Dim) -> (B*100, Dim)
-            flat_u_emb = (
-                batch_u_emb.unsqueeze(1)
-                .expand(-1, k_cands, -1)
-                .reshape(-1, settings.tower_out_dim)
+            batch_metrics = self._score_candidates_with_ranker(
+                candidates, batch_u_emb, batch_targets, new_item_mask, prefix
             )
+            for k, v in batch_metrics.items():
+                metrics_sum[k] = metrics_sum.get(k, 0.0) + v
 
-            # Fetch Item Embeddings & Metadata
-            # Use Fine-Tuned embeddings for Ranker scoring
-            flat_i_emb = self.ranker_item_embs[flat_candidates]  # type: ignore
-            flat_genre = self.genre_matrix[flat_candidates]  # type: ignore
-            flat_year = self.year_indices[flat_candidates]  # type: ignore
+        return {k: v / len(self.test_users) for k, v in metrics_sum.items()}
 
-            # Normalize Popularity
-            raw_pop = self.item_popularity[flat_candidates]  # type: ignore
-            flat_pop = (raw_pop - self.pop_mean) / (self.pop_std + 1e-6)
+    def eval_ranker_new_items(self):
+        """Evaluate Ranker on simulated new items (all candidates treated as unknown)."""
+        return self.eval_ranker(new_items=True)
 
-            with torch.no_grad():
-                # self.ranker now returns logits (no sigmoid). Sorting by logits is equivalent to sorting by probs.
-                ranker_scores = self.ranker(
-                    user_emb=flat_u_emb,
-                    item_emb=flat_i_emb,
-                    genre_multihot=flat_genre,
-                    year_idx=flat_year,
-                    popularity=flat_pop,
-                )  # type: ignore # (B*100)
+    def eval_feature_sensitivity(self):
+        """Evaluate feature importance by shuffling specific input features."""
+        self._load_embeddings()
+        self._load_ranker()
 
-            # Reshape scores to (B, 100)
-            ranker_scores = ranker_scores.view(current_bs, k_cands)
+        retrieve_k = 100
+        assert retrieve_k >= self.max_k, "Retrieval K must be >= Evaluation K"
 
-            # Sort the 100 candidates by Ranker Score
-            # We want the indices into the 'candidates' array (0..99)
-            _, sorted_local_indices = torch.topk(ranker_scores, k=self.max_k, dim=1)
+        features_to_test = ["genre", "year", "popularity"]
+        metrics_sum = {}
 
-            # Map back to original Item IDs
-            final_preds = (
-                torch.gather(candidates, 1, sorted_local_indices).cpu().numpy()
+        self.logger.info("Running Feature Sensitivity Analysis (Perturbation Test)...")
+        self.logger.info(f"Testing features: {features_to_test}")
+
+        for i in tqdm(range(0, len(self.test_users), self.batch_size)):
+            idx_end = i + self.batch_size
+            batch_u_idx = self.test_users[i:idx_end]
+            batch_targets = self.test_targets[i:idx_end]
+            batch_u_emb = self.user_embs[batch_u_idx]  # type: ignore
+
+            if self.sampled:
+                candidates = self.test_candidates[i:idx_end]
+            else:
+                # Retrieval
+                scores = torch.matmul(batch_u_emb, self.item_embs.T)  # type: ignore
+                scores = scores / settings.temperature
+                _, candidates = torch.topk(scores, k=retrieve_k, dim=1)
+
+            # 1. Baseline Ranker (No perturbation)
+            batch_metrics_base = self._score_candidates_with_ranker(
+                candidates, batch_u_emb, batch_targets, prefix="Ranker_"
             )
+            for k, v in batch_metrics_base.items():
+                metrics_sum[k] = metrics_sum.get(k, 0.0) + v
 
-            # B1. Record Ranker Metrics
-            res_ranker = self._batch_metrics(final_preds, batch_targets)
-            self._accumulate_metrics(metrics_sum, res_ranker, prefix="Ranker_")
+            # 2. Perturbed Ranker (One feature at a time)
+            for feat in features_to_test:
+                prefix = f"Perturb_{feat.capitalize()}_"
+                batch_metrics_pert = self._score_candidates_with_ranker(
+                    candidates,
+                    batch_u_emb,
+                    batch_targets,
+                    perturb_feature=feat,
+                    prefix=prefix,
+                )
+                for k, v in batch_metrics_pert.items():
+                    metrics_sum[k] = metrics_sum.get(k, 0.0) + v
 
         return {k: v / len(self.test_users) for k, v in metrics_sum.items()}
 
@@ -511,7 +619,16 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--model", type=str, required=True, choices=["popularity", "twotower", "ranker"]
+        "--model",
+        type=str,
+        required=True,
+        choices=[
+            "popularity",
+            "twotower",
+            "ranker",
+            "ranker_new",
+            "ranker_sensitivity",
+        ],
     )
     parser.add_argument("--batch_size", type=int, default=256)
     parser.add_argument(
@@ -542,6 +659,16 @@ if __name__ == "__main__":
         results = evaluator.eval_retrieval()
     elif args.model == "ranker":
         results = evaluator.eval_ranker()
+    elif args.model == "ranker_new":
+        results = evaluator.eval_ranker_new_items()
+    elif args.model == "ranker_sensitivity":
+        results = evaluator.eval_feature_sensitivity()
 
     print(f"\n--- Results ({args.model}) ---")
-    print(evaluator.formatted_results(results))
+    df = evaluator.formatted_results(results)
+    # Print all columns, 4 at a time
+    n_cols = df.shape[1]
+    col_chunks = [df.columns[i : i + 4] for i in range(0, n_cols, 4)]
+    for chunk in col_chunks:
+        print(df[chunk])
+        print()

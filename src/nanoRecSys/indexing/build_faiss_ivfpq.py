@@ -12,11 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import numpy as np
-import faiss
-from nanoRecSys.config import settings
-from pathlib import Path
 import argparse
+from pathlib import Path
+
+import faiss
+import numpy as np
+
+from nanoRecSys.config import settings
 
 
 def build_ivfpq_index(nlist=128, m=8, nbits=8, embeddings_path=None, output_path=None):

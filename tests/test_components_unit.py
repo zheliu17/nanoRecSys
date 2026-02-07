@@ -12,14 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from unittest.mock import MagicMock, patch
+
+import pandas as pd
 import pytest
 import torch
-import pandas as pd
-from unittest.mock import patch, MagicMock
 
-from nanoRecSys.models.towers import Tower
 from nanoRecSys.models.losses import InfoNCELoss
 from nanoRecSys.models.ranker import RankerModel
+from nanoRecSys.models.towers import Tower
 from nanoRecSys.utils.utils import compute_item_probabilities
 
 
@@ -32,8 +33,14 @@ class TestTower:
         VOCAB_SIZE = 10
         EMBED_DIM = 8
         OUTPUT_DIM = 8
+        HIDDEN_DIMS = [16, 12]
 
-        tower = Tower(vocab_size=VOCAB_SIZE, embed_dim=EMBED_DIM, output_dim=OUTPUT_DIM)
+        tower = Tower(
+            vocab_size=VOCAB_SIZE,
+            embed_dim=EMBED_DIM,
+            output_dim=OUTPUT_DIM,
+            hidden_dims=HIDDEN_DIMS,
+        )
 
         # Input: Batch of indices
         x = torch.randint(0, VOCAB_SIZE, (BATCH_SIZE,))

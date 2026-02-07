@@ -13,16 +13,17 @@
 # limitations under the License.
 
 import logging
-import torch
-import numpy as np
-import time
 import os
-import pandas as pd
+import time
 
-from nanoRecSys.models.towers import UserTower
-from nanoRecSys.models.ranker import RankerModel
-from nanoRecSys.utils.utils import compute_item_probabilities
+import numpy as np
+import pandas as pd
+import torch
+
 from nanoRecSys.config import settings
+from nanoRecSys.models.ranker import RankerModel
+from nanoRecSys.models.towers import UserTower
+from nanoRecSys.utils.utils import compute_item_probabilities
 
 from .faiss_store import FaissStore
 from .redis_cache import RedisCache

@@ -14,6 +14,7 @@
 
 import numpy as np
 from tqdm import tqdm
+
 from nanoRecSys.config import settings
 
 
@@ -73,7 +74,6 @@ def expand_embeddings(target_count=5_000_000):
     print(f"Generating synthetic data in {num_batches} batches...")
 
     for _ in tqdm(range(num_batches), desc="Generating Batches"):
-        # How many for this batch?
         current_batch_size = min(batch_size, needed)
 
         # 4a. Distractor Method: Generate independent random vectors matching global stats

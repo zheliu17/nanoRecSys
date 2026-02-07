@@ -13,8 +13,10 @@
 # limitations under the License.
 
 import logging
-from fastapi import FastAPI, HTTPException
 from contextlib import asynccontextmanager
+
+from fastapi import FastAPI, HTTPException
+
 from .schemas import RecommendRequest, RecommendResponse
 from .service import RecommendationService
 

@@ -14,8 +14,8 @@
 
 """Training modules for nanoRecSys."""
 
-from .retrieval import RetrievalPL, train_retriever
 from .ranker import RankerPL, train_ranker
+from .retrieval import RetrievalPL, train_retriever
 
 __all__ = [
     "RetrievalPL",

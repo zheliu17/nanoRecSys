@@ -13,9 +13,11 @@
 # limitations under the License.
 
 import time
+
+import faiss
 import numpy as np
 import pandas as pd
-import faiss
+
 from nanoRecSys.config import settings
 from nanoRecSys.eval.metrics import recall_at_k
 

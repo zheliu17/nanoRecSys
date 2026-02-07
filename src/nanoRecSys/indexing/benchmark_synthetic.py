@@ -12,13 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import time
-import numpy as np
-import faiss
+import argparse
 import csv
 import json
-import argparse
 import os
+import time
+
+import faiss
+import numpy as np
+
 from nanoRecSys.config import settings
 
 

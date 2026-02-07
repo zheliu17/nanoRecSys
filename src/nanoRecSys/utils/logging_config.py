@@ -15,8 +15,8 @@
 """Logging configuration for nanoRecSys."""
 
 import logging
-import sys
 import os
+import sys
 from pathlib import Path
 
 

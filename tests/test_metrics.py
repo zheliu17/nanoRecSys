@@ -14,12 +14,13 @@
 
 import numpy as np
 import pytest
+
 from nanoRecSys.eval.metrics import (
-    recall_at_k,
-    ndcg_at_k,
-    mrr_at_k,
-    hit_rate_at_k,
     compute_batch_metrics,
+    hit_rate_at_k,
+    mrr_at_k,
+    ndcg_at_k,
+    recall_at_k,
 )
 
 

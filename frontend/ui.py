@@ -12,12 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import streamlit as st
-import requests
-import pandas as pd
 import os
-import time
 import re
+import time
+
+import pandas as pd
+import requests
+import streamlit as st
 
 # Configuration
 API_URL = os.getenv("API_URL", "http://api:8000")  # Docker service name

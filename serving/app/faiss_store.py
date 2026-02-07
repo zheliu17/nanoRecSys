@@ -13,8 +13,9 @@
 # limitations under the License.
 
 import logging
-import faiss
 from pathlib import Path
+
+import faiss
 import torch
 
 logger = logging.getLogger(__name__)

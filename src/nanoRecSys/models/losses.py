@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Optional
+from typing import Optional, Union
 
 import torch
 import torch.nn as nn
@@ -36,6 +36,7 @@ class InfoNCELoss(nn.Module):
         candidate_probs: "Optional[torch.Tensor]" = None,
         user_ids: "Optional[torch.Tensor]" = None,
         item_ids: "Optional[torch.Tensor]" = None,
+        temperature: "Optional[Union[float, torch.Tensor]]" = None,
     ) -> torch.Tensor:
         """
         Args:
@@ -44,10 +45,16 @@ class InfoNCELoss(nn.Module):
             candidate_probs: (batch_size, ) - probability of each item in the batch
             user_ids: (batch_size, ) - User IDs to mask collisions (same user in batch)
             item_ids: (batch_size, ) - Item IDs to mask collisions (same item in batch)
+            temperature: Optional override for temperature
         """
         # Cosine similarity (assuming embeddings are already specialized)
         # logits: (batch, batch)
-        logits = torch.matmul(user_embeddings, item_embeddings.T) / self.temperature
+        if temperature is not None:
+            current_temp = temperature
+        else:
+            current_temp = self.temperature
+
+        logits = torch.matmul(user_embeddings, item_embeddings.T) / current_temp
         batch_size = user_embeddings.size(0)
         identity_mask = torch.eye(batch_size, device=user_embeddings.device).bool()
 
@@ -73,6 +80,78 @@ class InfoNCELoss(nn.Module):
         labels = torch.arange(batch_size, device=user_embeddings.device)
 
         return self.criterion(logits, labels)
+
+
+class DCLLoss(nn.Module):
+    """
+    Decoupled Contrastive Learning (DCL) Loss.
+    Removes positive samples from the denominator of the InfoNCE loss to eliminate
+    the negative gradient component from positive samples.
+    """
+
+    def __init__(self, temperature: float = 0.1):
+        super().__init__()
+        self.temperature = temperature
+
+    def forward(
+        self,
+        user_embeddings: torch.Tensor,
+        item_embeddings: torch.Tensor,
+        candidate_probs: "Optional[torch.Tensor]" = None,
+        user_ids: "Optional[torch.Tensor]" = None,
+        item_ids: "Optional[torch.Tensor]" = None,
+        temperature: "Optional[Union[float, torch.Tensor]]" = None,
+    ) -> torch.Tensor:
+        """
+        Args:
+            user_embeddings: (batch_size, dim)
+            item_embeddings: (batch_size, dim) - positive items corresponding to users
+            candidate_probs: (batch_size, ) - probability of each item in the batch
+            user_ids: (batch_size, ) - User IDs to mask collisions (same user in batch)
+            item_ids: (batch_size, ) - Item IDs to mask collisions (same item in batch)
+            temperature: Optional override for temperature
+        """
+        if temperature is not None:
+            current_temp = temperature
+        else:
+            current_temp = self.temperature
+
+        # 1. Compute logits: (B, B)
+        # rows: users, cols: items
+        logits = torch.matmul(user_embeddings, item_embeddings.T) / current_temp
+
+        # 2. LogQ Correction (if needed)
+        if candidate_probs is not None:
+            epsilon = 1e-10
+            log_probs = torch.log(candidate_probs + epsilon)
+            logits = logits - log_probs.unsqueeze(0)
+
+        batch_size = user_embeddings.size(0)
+        device = user_embeddings.device
+        identity_mask = torch.eye(batch_size, device=device).bool()
+
+        mask_for_denominator = identity_mask.clone()
+
+        # Apply user collision masking if user_ids are provided
+        if user_ids is not None:
+            match_mask = user_ids.unsqueeze(1) == user_ids.unsqueeze(0)
+            # match_mask includes diagonal, so just OR it
+            mask_for_denominator = mask_for_denominator | match_mask
+
+        # Apply item collision masking if item_ids are provided
+        if item_ids is not None:
+            match_mask = item_ids.unsqueeze(1) == item_ids.unsqueeze(0)
+            mask_for_denominator = mask_for_denominator | match_mask
+
+        dcl_denominator_logits = logits.masked_fill(mask_for_denominator, -1e9)
+
+        # 4. Calculate Loss
+        # Loss = LogSumExp(Negatives) - Positive_Score
+        # Maximizes the specific positive pair (diagonal).
+        pos_logits = torch.diagonal(logits)
+        log_sum_neg = torch.logsumexp(dcl_denominator_logits, dim=1)
+        loss = (log_sum_neg - pos_logits).mean()
+        return loss
 
 
 class MarginRankingLossWrapper(nn.Module):

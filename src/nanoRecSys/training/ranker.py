@@ -14,41 +14,52 @@
 
 """Ranker model training module."""
 
+import os
+from functools import partial
+
+import numpy as np
+import pytorch_lightning as pl
 import torch
 import torch.optim as optim
-import pytorch_lightning as pl
 import wandb
-import numpy as np
-from torch.utils.data import DataLoader, BatchSampler, RandomSampler, SequentialSampler
-from torchmetrics.classification import BinaryAUROC
-from pytorch_lightning.loggers import WandbLogger
 from pytorch_lightning.callbacks import ModelCheckpoint
-from torch.optim.lr_scheduler import LambdaLR
+from pytorch_lightning.loggers import WandbLogger
+from torch.utils.data import BatchSampler, DataLoader, RandomSampler, SequentialSampler
+from torchmetrics.classification import BinaryAUROC
 
 from nanoRecSys.config import settings
 from nanoRecSys.data.datasets import (
-    RankerTrainDataset,
     RankerEvalDataset,
+    RankerTrainDataset,
     load_item_metadata,
 )
-from nanoRecSys.models.ranker import RankerModel
-from nanoRecSys.utils.logging_config import get_logger
 from nanoRecSys.models.losses import get_ranker_loss
+from nanoRecSys.models.ranker import MLPRanker
+from nanoRecSys.utils.logging_config import get_logger
 from nanoRecSys.utils.utils import (
+    OnDemandEmbeddings,
+    collate_fn_with_embeddings,
     compute_item_probabilities,
-    collate_fn_numpy_to_tensor,
+    get_linear_warmup_scheduler,
 )
 
 
-def get_linear_warmup_scheduler(optimizer, warmup_steps):
-    """Create a linear warmup scheduler."""
-
-    def lr_lambda(current_step):
-        if current_step < warmup_steps:
-            return float(current_step) / float(max(1, warmup_steps))
-        return 1.0
-
-    return LambdaLR(optimizer, lr_lambda)
+def create_val_dataloader(
+    dataset, batch_size, collate_fn, num_workers, pin_memory, persistent_workers
+):
+    """Helper function to create validation dataloader with consistent configuration."""
+    val_sampler = SequentialSampler(dataset)
+    val_batch_sampler = BatchSampler(
+        val_sampler, batch_size=batch_size, drop_last=False
+    )
+    return DataLoader(
+        dataset,
+        batch_sampler=val_batch_sampler,
+        collate_fn=collate_fn,
+        num_workers=num_workers,
+        pin_memory=pin_memory,
+        persistent_workers=persistent_workers,
+    )
 
 
 class RankerPL(pl.LightningModule):
@@ -64,26 +75,18 @@ class RankerPL(pl.LightningModule):
         num_genres,
         num_years,
         # Hyperparams
-        id_dropout_prob,
-        lr,
-        item_lr,
-        weight_decay,
-        adam_beta1,
-        adam_beta2,
-        adam_eps,
-        use_scheduler,
-        warmup_steps,
-        pretrained_user_embeddings,
+        optimizer_params,
+        ranker_params,
         pretrained_item_embeddings,
-        loss_type,
-        loss_margin,
     ):
         super().__init__()
-        # User embeddings: Frozen Buffer
-        self.register_buffer("user_embeddings", pretrained_user_embeddings)
+
+        self.optimizer_params = optimizer_params
+        self.ranker_params = ranker_params
+        self.item_lr = self.optimizer_params.get("item_lr")
 
         # Item embeddings: Trainable Parameter OR Frozen Buffer
-        if item_lr > 0:
+        if self.item_lr > 0:
             # We wrap in nn.Parameter to ensure it's treated as a model parameter that needs gradients
             self.item_embeddings = torch.nn.Parameter(pretrained_item_embeddings)
         else:
@@ -98,7 +101,7 @@ class RankerPL(pl.LightningModule):
         self.register_buffer("pop_mean", pop_mean)
         self.register_buffer("pop_std", pop_std)
 
-        self.model = RankerModel(
+        self.model = MLPRanker(
             input_dim=embed_dim,
             hidden_dims=settings.ranker_hidden_dims,
             num_genres=num_genres,
@@ -108,18 +111,12 @@ class RankerPL(pl.LightningModule):
         )
         # Create loss function based on loss_type
         self.criterion = get_ranker_loss(
-            loss_type=loss_type, margin=loss_margin, reduction="none"
+            loss_type=ranker_params.get("loss_type"),
+            margin=ranker_params.get("loss_margin"),
+            reduction="none",
         )
-        self.loss_type = loss_type
-        self.lr = lr
-        self.item_lr = item_lr
-        self.id_dropout_prob = id_dropout_prob
-        self.weight_decay = weight_decay
-        self.adam_beta1 = adam_beta1
-        self.adam_beta2 = adam_beta2
-        self.adam_eps = adam_eps
-        self.use_scheduler = use_scheduler
-        self.warmup_steps = warmup_steps
+        self.loss_type = ranker_params.get("loss_type")
+        self.id_dropout_prob = ranker_params.get("id_dropout_prob")
 
         # Metrics
         self.val_auc_explicit = BinaryAUROC()
@@ -132,14 +129,14 @@ class RankerPL(pl.LightningModule):
                 "genre_matrix",
                 "year_indices",
                 "popularity",
-                "pretrained_user_embeddings",
                 "pretrained_item_embeddings",
             ]
         )
 
     def forward(self, users, items):
-        u_emb = self.user_embeddings[users]  # type: ignore
-        i_emb = self.item_embeddings[items]  # type: ignore (Accesses Parameter)
+        # items is the item indices
+        u_emb = users  # Already loaded by collate_fn
+        i_emb = self.item_embeddings[items]  # type: ignore
 
         # Look up metadata
         g_mat = self.genre_matrix[items]  # type: ignore # (B, NumGenres)
@@ -263,21 +260,30 @@ class RankerPL(pl.LightningModule):
             else:
                 main_params.append(param)
 
-        optimizer_groups = [{"params": main_params, "lr": self.lr}]
+        optimizer_groups = [
+            {"params": main_params, "lr": self.optimizer_params.get("lr")}
+        ]
         if len(embedding_params) > 0:
-            optimizer_groups.append({"params": embedding_params, "lr": self.item_lr})
+            optimizer_groups.append(
+                {"params": embedding_params, "lr": self.optimizer_params.get("item_lr")}
+            )
 
         optimizer = optim.AdamW(
             optimizer_groups,
-            weight_decay=self.weight_decay,
-            betas=(self.adam_beta1, self.adam_beta2),
-            eps=self.adam_eps,
+            weight_decay=self.optimizer_params.get("weight_decay"),
+            betas=(
+                self.optimizer_params.get("adam_beta1"),
+                self.optimizer_params.get("adam_beta2"),
+            ),
+            eps=self.optimizer_params.get("adam_eps"),
         )
 
-        if self.use_scheduler:
+        if self.optimizer_params.get("use_scheduler", False):
             # Note: LambdaLR applies to all groups or list of lambdas.
             # If one lambda, it applies to all.
-            scheduler = get_linear_warmup_scheduler(optimizer, self.warmup_steps)
+            scheduler = get_linear_warmup_scheduler(
+                optimizer, self.optimizer_params.get("warmup_steps", 0)
+            )
             return {
                 "optimizer": optimizer,
                 "lr_scheduler": {
@@ -296,7 +302,7 @@ def train_ranker(args, vocab_sizes):
 
     # 1. Load Embeddings from Disk
     logger.info("Checking for pre-computed user/item embeddings...")
-    user_emb_path = settings.artifacts_dir / "user_embeddings.npy"
+    user_emb_path = getattr(args, "user_emb_path")
     item_emb_path = settings.artifacts_dir / "item_embeddings.npy"
 
     # Check User Embeddings
@@ -316,13 +322,35 @@ def train_ranker(args, vocab_sizes):
         return
 
     logger.info("Loading embeddings from disk...")
-    # Load as numpy then convert to tensor
+    # Load item embeddings fully (they're smaller and needed for scoring)
+    # User embeddings will be loaded on-demand in DataLoader collate function
     try:
-        user_embeddings = torch.from_numpy(np.load(user_emb_path))
         item_embeddings = torch.from_numpy(np.load(item_emb_path))
-        logger.info(
-            f"Loaded User Embeddings: {user_embeddings.shape}, Item Embeddings: {item_embeddings.shape}"
-        )
+        user_path_str = str(user_emb_path)
+        try:
+            size_bytes = os.path.getsize(user_path_str)
+        except Exception:
+            size_bytes = None
+
+        LOAD_THRESHOLD = 8 * 1024**3  # 8 GB
+
+        if size_bytes is not None and size_bytes <= LOAD_THRESHOLD:
+            arr = np.load(user_path_str, mmap_mode=None)
+            user_embeddings = torch.from_numpy(arr).float()
+            try:
+                user_embeddings.share_memory_()
+            except Exception:
+                # share_memory_ may fail on some platforms/configs; ignore and continue
+                pass
+            logger.info(
+                f"User Embeddings (in-memory, shared): {user_embeddings.shape}, Item Embeddings: {item_embeddings.shape}"
+            )
+        else:
+            # This won't crash. But will be extremely slow if accessed randomly.
+            user_embeddings = OnDemandEmbeddings(user_path_str)
+            logger.info(
+                f"User Embeddings (on-demand): {user_embeddings.shape}, Item Embeddings: {item_embeddings.shape}"
+            )
     except Exception as e:
         logger.error(f"Error loading embeddings: {e}")
         return
@@ -345,11 +373,9 @@ def train_ranker(args, vocab_sizes):
     # 4. Data
     logger.info("Loading training data for Ranker...")
     train_dataset = RankerTrainDataset(
-        interactions_path=str(settings.processed_data_dir / "train.parquet"),
-        hard_neg_path=str(settings.processed_data_dir / "train_negatives_hard.parquet"),
-        random_neg_path=str(
-            settings.processed_data_dir / "train_negatives_random.parquet"
-        ),
+        interactions_path=getattr(args, "train_interactions_path"),
+        hard_neg_path=getattr(args, "train_hard_negatives_path"),
+        random_neg_path=getattr(args, "train_random_negatives_path"),
         pos_threshold=args.ranker_positive_threshold,
         neg_threshold=args.ranker_negative_threshold,
         explicit_neg_weight=getattr(
@@ -366,10 +392,15 @@ def train_ranker(args, vocab_sizes):
         train_sampler, batch_size=args.batch_size, drop_last=True
     )
 
+    # Create collate function that loads embeddings on-demand
+    collate_fn_train = partial(
+        collate_fn_with_embeddings, user_embeddings=user_embeddings
+    )
+
     train_loader = DataLoader(
         train_dataset,
         batch_sampler=train_batch_sampler,
-        collate_fn=collate_fn_numpy_to_tensor,
+        collate_fn=collate_fn_train,
         # batch_size=None, # batch_sampler implies batch_size=None
         num_workers=num_workers,
         pin_memory=settings.pin_memory,
@@ -378,71 +409,63 @@ def train_ranker(args, vocab_sizes):
 
     # Val Datasets
     val_dataloaders = []
+    collate_fn_val = partial(
+        collate_fn_with_embeddings, user_embeddings=user_embeddings
+    )
 
     # 1. Hard (Idx 0)
     val_dataset_hard = RankerEvalDataset(
-        interactions_path=str(settings.processed_data_dir / "val.parquet"),
-        negatives_path=str(settings.processed_data_dir / "val_negatives_hard.parquet"),
+        interactions_path=getattr(args, "val_interactions_path"),
+        negatives_path=getattr(args, "val_hard_negatives_path"),
         mode="hard",
         pos_threshold=args.ranker_positive_threshold,
     )
-    val_sampler_hard = SequentialSampler(val_dataset_hard)
-    val_batch_sampler_hard = BatchSampler(
-        val_sampler_hard, batch_size=args.batch_size, drop_last=False
-    )
-    val_loader_hard = DataLoader(
+    val_loader_hard = create_val_dataloader(
         val_dataset_hard,
-        batch_sampler=val_batch_sampler_hard,
-        collate_fn=collate_fn_numpy_to_tensor,
-        num_workers=num_workers,
-        pin_memory=settings.pin_memory,
-        persistent_workers=(num_workers > 0),
+        args.batch_size,
+        collate_fn_val,
+        num_workers,
+        settings.pin_memory,
+        num_workers > 0,
     )
     val_dataloaders.append(val_loader_hard)
 
     # 2. Random (Idx 1)
     val_dataset_random = RankerEvalDataset(
-        interactions_path=str(settings.processed_data_dir / "val.parquet"),
-        negatives_path=str(
-            settings.processed_data_dir / "val_negatives_random.parquet"
-        ),
+        interactions_path=getattr(args, "val_interactions_path"),
+        negatives_path=getattr(args, "val_random_negatives_path"),
         mode="random",
         pos_threshold=args.ranker_positive_threshold,
     )
-    val_sampler_random = SequentialSampler(val_dataset_random)
-    val_batch_sampler_random = BatchSampler(
-        val_sampler_random, batch_size=args.batch_size, drop_last=False
-    )
-    val_loader_random = DataLoader(
+    val_loader_random = create_val_dataloader(
         val_dataset_random,
-        batch_sampler=val_batch_sampler_random,
-        collate_fn=collate_fn_numpy_to_tensor,
-        num_workers=num_workers,
-        pin_memory=settings.pin_memory,
-        persistent_workers=(num_workers > 0),
+        args.batch_size,
+        collate_fn_val,
+        num_workers,
+        settings.pin_memory,
+        num_workers > 0,
     )
     val_dataloaders.append(val_loader_random)
 
     # 3. Explicit (Idx 2 - Optional)
-    if args.ranker_negative_threshold is not None:
+    if (
+        args.ranker_negative_threshold is not None
+        and args.ranker_negative_threshold > 0
+    ):
         val_dataset_explicit = RankerEvalDataset(
-            interactions_path=str(settings.processed_data_dir / "val.parquet"),
+            interactions_path=getattr(args, "val_interactions_path"),
             negatives_path=None,
             mode="explicit",
             pos_threshold=args.ranker_positive_threshold,
             neg_threshold=args.ranker_negative_threshold,
         )
-        val_sampler_explicit = SequentialSampler(val_dataset_explicit)
-        val_batch_sampler_explicit = BatchSampler(
-            val_sampler_explicit, batch_size=args.batch_size, drop_last=False
-        )
-        val_loader_explicit = DataLoader(
+        val_loader_explicit = create_val_dataloader(
             val_dataset_explicit,
-            batch_sampler=val_batch_sampler_explicit,
-            collate_fn=collate_fn_numpy_to_tensor,
-            num_workers=num_workers,
-            pin_memory=settings.pin_memory,
-            persistent_workers=(num_workers > 0),
+            args.batch_size,
+            collate_fn_val,
+            num_workers,
+            settings.pin_memory,
+            num_workers > 0,
         )
         val_dataloaders.append(val_loader_explicit)
 
@@ -466,25 +489,29 @@ def train_ranker(args, vocab_sizes):
         pop_std=pop_std,
         num_genres=num_genres,
         num_years=num_years,
-        id_dropout_prob=args.id_dropout,
-        lr=args.lr,
-        item_lr=args.item_lr,
-        weight_decay=args.weight_decay,
-        adam_beta1=args.adam_beta1,
-        adam_beta2=args.adam_beta2,
-        adam_eps=args.adam_eps,
-        use_scheduler=args.use_scheduler,
-        warmup_steps=args.warmup_steps,
-        pretrained_user_embeddings=user_embeddings,
+        optimizer_params={
+            "lr": args.lr,
+            "item_lr": args.item_lr,
+            "weight_decay": args.weight_decay,
+            "adam_beta1": args.adam_beta1,
+            "adam_beta2": args.adam_beta2,
+            "adam_eps": args.adam_eps,
+            "use_scheduler": args.use_scheduler,
+            "warmup_steps": args.warmup_steps,
+        },
+        ranker_params={
+            "id_dropout_prob": args.id_dropout,
+            "loss_type": args.ranker_loss_type,
+            "loss_margin": args.ranker_loss_margin,
+        },
         pretrained_item_embeddings=item_embeddings,
-        loss_type=args.ranker_loss_type,
-        loss_margin=args.ranker_loss_margin,
     )
 
     # 5. Trainer
-    # Pass all args to wandb config for tracking
     wandb_logger = WandbLogger(
-        project="nanoRecSys", name="ranker_run", config=vars(args)
+        project="nanoRecSys",
+        name=getattr(args, "wandb_run_name", None) or "ranker_run",
+        config=vars(args),
     )
     checkpoint_callback = ModelCheckpoint(
         dirpath=settings.artifacts_dir,
@@ -492,6 +519,15 @@ def train_ranker(args, vocab_sizes):
         save_top_k=1,
         monitor="val_auc_hard",
         mode="max",
+        save_last=False,
+        every_n_epochs=args.check_val_every_n_epoch,
+    )
+
+    # https://github.com/Lightning-AI/pytorch-lightning/issues/19325
+    last_checkpoint_callback = ModelCheckpoint(
+        dirpath=settings.artifacts_dir,
+        filename="latest",
+        save_top_k=1,
         save_last=True,
         every_n_epochs=args.check_val_every_n_epoch,
     )
@@ -501,11 +537,12 @@ def train_ranker(args, vocab_sizes):
         max_steps=getattr(args, "max_steps", -1),
         limit_train_batches=getattr(args, "limit_train_batches", 1.0),
         accelerator="auto",
-        devices=1,
+        devices="auto",
         logger=wandb_logger,
-        callbacks=[checkpoint_callback],
+        callbacks=[checkpoint_callback, last_checkpoint_callback],
         log_every_n_steps=10,
         check_val_every_n_epoch=args.check_val_every_n_epoch,
+        enable_progress_bar=args.enable_progress_bar,
     )
 
     ckpt_path = getattr(args, "ckpt_path", None)

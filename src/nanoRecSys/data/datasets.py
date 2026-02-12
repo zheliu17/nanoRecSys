@@ -12,13 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import pandas as pd
-import torch
-import numpy as np
 import os
 import re
+from pathlib import Path
+from typing import Optional, Union
+
+import numpy as np
+import pandas as pd
+import torch
 from torch.utils.data import Dataset
-from typing import Optional
+
 from nanoRecSys.utils.logging_config import get_logger
 
 
@@ -263,8 +266,8 @@ class RankerTrainDataset(Dataset):
         interactions_path: str,
         hard_neg_path: str,
         random_neg_path: str,
-        pos_threshold: float,
-        neg_threshold: float,
+        pos_threshold: Union[float, None],
+        neg_threshold: Union[float, None],
         explicit_neg_weight: float,
         random_neg_ratio: float,
     ):
@@ -284,20 +287,16 @@ class RankerTrainDataset(Dataset):
             if pos_data is not None:
                 logger.info(f"  - Loaded {pos_data.shape[0]} positives")
 
-        if explicit_neg_weight > 0.0:
+        if explicit_neg_weight > 0.0 and exp_neg_data is not None:
             b_exp = _make_block(
                 exp_neg_data, label=0.0, weight=explicit_neg_weight, return_weight=True
             )
-        else:
-            b_exp = None
-            logger.info("  - Skipping explicit negatives (weight=0)")
-
-        if b_exp is not None:
             data_blocks.append(b_exp)
-            if exp_neg_data is not None:
-                logger.info(
-                    f"  - Loaded {exp_neg_data.shape[0]} explicit negatives (weight={explicit_neg_weight})"
-                )
+            logger.info(
+                f"  - Loaded {exp_neg_data.shape[0]} explicit negatives (weight={explicit_neg_weight})"
+            )
+        else:
+            logger.info("  - Skipping explicit negatives")
 
         # 2. Hard Negatives
         hard_data = _load_hard_negatives_data(hard_neg_path)
@@ -422,3 +421,46 @@ class RankerEvalDataset(Dataset):
 
     def __getitems__(self, idxs):
         return self.users[idxs], self.items[idxs], self.labels[idxs]
+
+
+class SequentialDataset(Dataset):
+    def __init__(self, interactions_path: str):
+        logger = get_logger()
+        # ".../train.parquet" or ".../val.parquet"
+        path_obj = Path(interactions_path)
+        stem = path_obj.stem
+
+        parent = path_obj.parent
+        # 1 index
+        seq_path = parent / f"seq_{stem}_sequences.npy"
+        # 0 index, see src/nanoRecSys/data/build_dataset.py
+        uid_path = parent / f"seq_{stem}_user_ids.npy"
+
+        if not (seq_path.exists() and uid_path.exists()):
+            logger.error(f"Pre-built sequence files not found for {stem} at {parent}")
+            logger.error(
+                "Please run: python src/nanoRecSys/data/build_dataset.py --task prebuild"
+            )
+            raise FileNotFoundError(f"Missing pre-built sequences for {stem}")
+
+        logger.info(f"Loading pre-built sequences for {stem}...")
+        self.sequences = np.load(seq_path)
+        self.user_ids = np.load(uid_path)
+
+        if stem == "val":
+            rng = np.random.default_rng(42)
+            perm = rng.permutation(len(self.sequences))
+
+            self.sequences = self.sequences[perm]
+            self.user_ids = self.user_ids[perm]
+
+        logger.info(f"Sequential Dataset ({stem}): {len(self.sequences)} samples")
+
+    def __len__(self):
+        return len(self.sequences)
+
+    def __getitem__(self, idx):
+        return self.sequences[idx], self.user_ids[idx]
+
+    def __getitems__(self, idxs):
+        return self.sequences[idxs], self.user_ids[idxs]

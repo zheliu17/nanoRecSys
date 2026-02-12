@@ -16,46 +16,14 @@
 Mine hard negatives and random negatives for training the ranker.
 """
 
-import torch
 import numpy as np
 import pandas as pd
+import torch
 from tqdm import tqdm
+
 from nanoRecSys.config import settings
 from nanoRecSys.utils.logging_config import get_logger
-
-
-def load_all_positives() -> dict:
-    """
-    Load all positive interactions for each user across train, val, and test splits.
-    Returns:
-        dict: user_idx -> set of positive item_idxs
-    """
-    logger = get_logger()
-    logger.info("Loading all interactions to build global positive sets...")
-
-    dfs = []
-    splits = ["train", "val", "test"]
-
-    for split in splits:
-        path = settings.processed_data_dir / f"{split}.parquet"
-        if path.exists():
-            df = pd.read_parquet(path)
-            # Filter by ranker positive threshold
-            df = df[df["rating"] >= settings.ranker_positive_threshold]
-            dfs.append(df[["user_idx", "item_idx"]])
-
-    if not dfs:
-        raise FileNotFoundError(
-            "No processed data files found (train/val/test.parquet)"
-        )
-
-    full_df = pd.concat(dfs, ignore_index=True)
-
-    # Group by user
-    logger.info(f"Grouping {len(full_df)} positive interactions by user...")
-    user_positives = full_df.groupby("user_idx")["item_idx"].apply(set).to_dict()
-
-    return user_positives
+from nanoRecSys.utils.utils import load_all_positives
 
 
 def mine_hard_negatives_for_split(
@@ -120,6 +88,7 @@ def mine_hard_negatives_for_split(
                 candidates = []
 
             user_candidates[u_idx] = candidates
+    tqdm.write("")
 
     # Now assign one hard negative for each interaction in the dataframe
     n_items = item_embeddings.shape[0]
@@ -242,7 +211,7 @@ def main(top_k=None, skip_top=None, batch_size=None):
     user_embeddings = np.load(user_emb_path)
 
     # 3. Load Global Positives
-    all_positives = load_all_positives()
+    all_positives = load_all_positives(settings.ranker_positive_threshold)
 
     # Process Train and Val splits
     for split in ["train", "val"]:

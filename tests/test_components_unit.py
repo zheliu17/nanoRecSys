@@ -19,7 +19,7 @@ import pytest
 import torch
 
 from nanoRecSys.models.losses import InfoNCELoss
-from nanoRecSys.models.ranker import RankerModel
+from nanoRecSys.models.ranker import MLPRanker
 from nanoRecSys.models.towers import Tower
 from nanoRecSys.utils.utils import compute_item_probabilities
 
@@ -104,7 +104,7 @@ class TestRanker:
         NUM_GENRES = 4
         NUM_YEARS = 10
 
-        model = RankerModel(
+        model = MLPRanker(
             input_dim=INPUT_DIM,
             hidden_dims=[16, 8],
             num_genres=NUM_GENRES,
@@ -128,7 +128,7 @@ class TestRanker:
 
         output = model(user_emb, item_emb, genre_multihot, year_idx, popularity)
 
-        # RankerModel.forward applies .squeeze(), so shape is (BATCH_SIZE,)
+        # MLPRanker.forward applies .squeeze(), so shape is (BATCH_SIZE,)
         assert output.shape == (BATCH_SIZE,)
 
 

@@ -14,38 +14,36 @@
 
 """Retrieval model training module."""
 
-import torch
-import torch.optim as optim
-import pandas as pd
-import wandb
 import numpy as np
+import pandas as pd
 import pytorch_lightning as pl
-from torch.utils.data import DataLoader, BatchSampler, RandomSampler, SequentialSampler
-from pytorch_lightning.loggers import WandbLogger
+import torch
+import torch.nn.functional as F
+import torch.optim as optim
+import wandb
 from pytorch_lightning.callbacks import ModelCheckpoint
-from torch.optim.lr_scheduler import LambdaLR
+from pytorch_lightning.loggers import WandbLogger
+from torch.utils.data import BatchSampler, DataLoader, RandomSampler, SequentialSampler
 
 from nanoRecSys.config import settings
-from nanoRecSys.data.datasets import InteractionsDataset, UniqueUserDataset
-from nanoRecSys.utils.logging_config import get_logger
-from nanoRecSys.models.towers import TwoTowerModel, UserTower, ItemTower
-from nanoRecSys.models.losses import InfoNCELoss
-from nanoRecSys.eval.metrics import recall_at_k
-from nanoRecSys.utils.utils import (
-    compute_item_probabilities,
-    collate_fn_numpy_to_tensor,
+from nanoRecSys.data.datasets import (
+    InteractionsDataset,
+    SequentialDataset,
 )
-
-
-def get_linear_warmup_scheduler(optimizer, warmup_steps):
-    """Create a linear warmup scheduler."""
-
-    def lr_lambda(current_step):
-        if current_step < warmup_steps:
-            return float(current_step) / float(max(1, warmup_steps))
-        return 1.0
-
-    return LambdaLR(optimizer, lr_lambda)
+from nanoRecSys.eval.metrics import recall_at_k
+from nanoRecSys.models.losses import DCLLoss, InfoNCELoss
+from nanoRecSys.models.towers import (
+    ItemTower,
+    TransformerUserTower,
+    UserTower,
+)
+from nanoRecSys.utils.logging_config import get_logger
+from nanoRecSys.utils.utils import (
+    collate_fn_numpy_to_tensor,
+    compute_item_probabilities,
+    compute_seq_item_probabilities,
+    get_linear_warmup_scheduler,
+)
 
 
 class RetrievalPL(pl.LightningModule):
@@ -53,61 +51,219 @@ class RetrievalPL(pl.LightningModule):
         self,
         n_users,
         n_items,
-        embed_dim,
-        output_dim,
+        embed_dim,  # MLP tower initial embedding dimension
+        output_dim,  # Tower output dimension
         hidden_dims,
-        lr,
-        weight_decay,
-        adam_beta1,
-        adam_beta2,
-        adam_eps,
-        use_scheduler,
-        warmup_steps,
+        use_projection,
+        optimizer_params,
         item_probs,
         temperature,
+        learnable_temperature,
         val_users,
         val_ground_truth,
+        user_tower_type,
+        transformer_params,
+        negative_sampling_strategy,
+        num_negatives,
+        loss_type,
     ):
         super().__init__()
         self.save_hyperparameters(
             ignore=["item_probs", "val_ground_truth", "val_users"]
         )
         if item_probs is not None:
-            self.register_buffer("item_probs", item_probs)
+            self.register_buffer("item_probs", item_probs, persistent=False)
 
         self.val_users = val_users
         self.val_ground_truth = val_ground_truth
+        self.user_tower_type = user_tower_type
+        self.optimizer_params = optimizer_params
+        self.negative_sampling_strategy = negative_sampling_strategy
+        self.num_negatives = num_negatives
+        self.loss_type = loss_type
 
-        self.user_tower = UserTower(
-            n_users, embed_dim=embed_dim, output_dim=output_dim, hidden_dims=hidden_dims
-        )
+        self.learnable_temperature = learnable_temperature
+        if self.learnable_temperature:
+            self.log_temperature = torch.nn.Parameter(torch.tensor(np.log(temperature)))
+            self.temperature = None  # Not used directly if learnable
+        else:
+            self.temperature = temperature
+
         self.item_tower = ItemTower(
-            n_items, embed_dim=embed_dim, output_dim=output_dim, hidden_dims=hidden_dims
+            n_items,
+            embed_dim=embed_dim,
+            output_dim=output_dim,
+            hidden_dims=hidden_dims,
+            use_projection=use_projection,
         )
-        self.model = TwoTowerModel(self.user_tower, self.item_tower)
-        self.criterion = InfoNCELoss(temperature=temperature)
-        self.lr = lr
-        self.weight_decay = weight_decay
-        self.adam_beta1 = adam_beta1
-        self.adam_beta2 = adam_beta2
-        self.adam_eps = adam_eps
-        self.use_scheduler = use_scheduler
-        self.warmup_steps = warmup_steps
+
+        if user_tower_type == "transformer":
+            self.user_tower = TransformerUserTower(
+                vocab_size=n_items,
+                # We share the same embedding dimension as item tower
+                # input dim here = tower output dim
+                embed_dim=output_dim,
+                output_dim=output_dim,
+                max_seq_len=transformer_params.get("max_seq_len"),
+                n_heads=transformer_params.get("n_heads"),
+                n_layers=transformer_params.get("n_layers"),
+                dropout=transformer_params.get("dropout"),
+                swiglu_hidden_dim=transformer_params.get("swiglu_hidden_dim"),
+                shared_embedding=self.item_tower,
+            )
+        elif user_tower_type == "mlp":
+            self.user_tower = UserTower(
+                n_users,
+                embed_dim=embed_dim,
+                output_dim=output_dim,
+                hidden_dims=hidden_dims,
+            )
+        else:
+            raise ValueError(f"Unknown user_tower_type: {user_tower_type}")
+
+        if self.loss_type == "info_nce":
+            self.criterion = InfoNCELoss(temperature=temperature)
+        elif self.loss_type == "dcl":
+            self.criterion = DCLLoss(temperature=temperature)
+        else:
+            raise ValueError(f"Unknown loss_type: {self.loss_type}")
+        self.val_criterion = InfoNCELoss(temperature=temperature)
+
+    @property
+    def current_temperature(self):
+        if self.learnable_temperature:
+            log_t = torch.clamp(self.log_temperature, min=np.log(1e-3), max=np.log(10))
+            return torch.exp(log_t)
+        return self.temperature
 
     def forward(self, users, items):
-        return self.model(users, items)
+        # MLP: 0 index input
+        # Transformer: 1 index sequence input
+        u_emb = self.user_tower.encode(users)
+        # 0 index input
+        i_emb = self.item_tower.encode(items)
+        return u_emb, i_emb
 
-    def training_step(self, batch, batch_idx):
-        users, items, _ = batch
-        u_emb, i_emb = self(users, items)
+    def _compute_in_batch_loss(self, batch):
+        if self.user_tower_type == "transformer":
+            sequences, user_ids = batch
 
+            inputs = sequences[:, :-1]
+            targets = sequences[:, 1:]  # The actual items to predict
+
+            # Forward pass through User Tower (Transformer)
+            # Returns (B, L, D) embeddings for each position
+            u_emb = self.user_tower(inputs)
+
+            # u_emb: (B, L, D) -> Flatten to (N, D)
+            B, L, D = u_emb.shape
+            u_emb_flat = u_emb.reshape(-1, D)
+            targets_flat = targets.reshape(-1)
+
+            # Filter out padding targets (0 is padding)
+            valid_mask = targets_flat != 0
+
+            # Prepare inputs for loss
+            final_u_emb = u_emb_flat[valid_mask]
+            final_targets = targets_flat[valid_mask]
+            final_targets -= 1  # Shift back to 0-indexed items
+
+            # Don't mask user collisions for sequence targets
+            final_user_ids = None
+            # Expand user_ids to match sequence length for collision masking
+            # user_ids: (B,) -> (B, L)
+            # user_ids_expanded = user_ids.unsqueeze(1).expand(-1, L)
+            # final_user_ids = user_ids_expanded.reshape(-1)[valid_mask]
+
+            # Get Item Embeddings for targets
+            final_i_emb = self.item_tower(final_targets)
+
+        else:
+            users_input, items, _ = batch
+            final_u_emb, final_i_emb = self(users_input, items)
+            final_targets = items
+            final_user_ids = users_input
+
+        # LogQ Correction
         batch_probs = None
         if hasattr(self, "item_probs") and self.item_probs is not None:
-            batch_probs = getattr(self, "item_probs")[items]
+            batch_probs = getattr(self, "item_probs")[final_targets]
 
         loss = self.criterion(
-            u_emb, i_emb, candidate_probs=batch_probs, user_ids=users, item_ids=items
+            final_u_emb,
+            final_i_emb,
+            candidate_probs=batch_probs,
+            # final_user_ids used to mask collisions; Doesn't matter 0 or 1 index
+            # In fact, for transformer, user_ids are 0-indexed already
+            user_ids=final_user_ids,
+            item_ids=final_targets,
+            temperature=self.current_temperature,
         )
+        return loss
+
+    def _compute_sampled_loss(self, batch):
+        if self.user_tower_type != "transformer":
+            raise ValueError(
+                "Sampled negative sampling is only supported for Transformer architecture"
+            )
+
+        sequences, user_ids = batch
+
+        inputs = sequences[:, :-1]
+        targets = sequences[:, 1:]
+
+        # User embeddings: (B, L, D)
+        u_emb = self.user_tower(inputs)
+        B, L, D = u_emb.shape
+
+        # Positives
+        # targets are 1-based (0 is padding).
+        valid_mask = targets != 0
+        targets_idx = targets.clone()
+        targets_idx[~valid_mask] = 1  # dummy to avoid index error
+        targets_idx = targets_idx - 1  # 0-based
+
+        pos_i_emb = self.item_tower(targets_idx)  # (B, L, D)
+
+        # Negatives (Sampled)
+        n_items = self.item_tower.embedding.num_embeddings
+        neg_ids = torch.randint(0, n_items, (B, self.num_negatives), device=self.device)
+        neg_i_emb = self.item_tower(neg_ids)  # (B, K, D)
+
+        # Calculate Scores
+        # pos: (B, L)
+        pos_scores = (u_emb * pos_i_emb).sum(dim=-1)
+
+        # neg: (B, L, D) x (B, D, K) -> (B, L, K)
+        neg_scores = torch.matmul(u_emb, neg_i_emb.transpose(1, 2))
+
+        # Collision Masking: Mask negatives that match the exact target at each step.
+        # targets: (B, L) -> (B, L, 1)
+        # neg_ids: (B, K) -> (B, 1, K) -> +1 to match 1-based targets
+        # collision_mask: (B, L, K)
+        collision_mask = targets.unsqueeze(2) == (neg_ids.unsqueeze(1) + 1)
+        neg_scores = neg_scores.masked_fill(collision_mask, -1e9)
+
+        # Concat Logits: (B, L, 1+K)
+        logits = torch.cat([pos_scores.unsqueeze(-1), neg_scores], dim=-1)
+        logits = logits / self.current_temperature  # type: ignore
+
+        # Loss on valid positions
+        valid_logits = logits[valid_mask]
+        labels = torch.zeros(valid_logits.size(0), dtype=torch.long, device=self.device)
+
+        return F.cross_entropy(valid_logits, labels)
+
+    def training_step(self, batch, batch_idx):
+        if self.negative_sampling_strategy == "in-batch":
+            loss = self._compute_in_batch_loss(batch)
+        elif self.negative_sampling_strategy == "sampled":
+            loss = self._compute_sampled_loss(batch)
+        else:
+            raise ValueError(
+                f"Unknown negative sampling strategy: {self.negative_sampling_strategy}"
+            )
+
         self.log("train_loss", loss, prog_bar=True, on_step=True, on_epoch=True)
         return loss
 
@@ -130,7 +286,7 @@ class RetrievalPL(pl.LightningModule):
         hits = (top_indices == targets.unsqueeze(1)).any(dim=1).float()
         return hits.mean()
 
-    def _compute_sampled_hit_rate(self, users, u_emb, i_emb):
+    def _compute_sampled_hit_rate(self, batch_size, u_emb, i_emb):
         """
         Sampled HitRate@10: For each user, compares the positive item score against
         99 randomly sampled negative items (1 pos vs 99 negs).
@@ -138,15 +294,14 @@ class RetrievalPL(pl.LightningModule):
         This metric is not recommended for evaluation purposes.
         See https://dl.acm.org/doi/10.1145/3535335
         """
-        B = users.size(0)
         n_neg = 99
         # Randomly sample negatives
         n_items = self.item_tower.embedding.num_embeddings
-        neg_items = torch.randint(0, n_items, (B * n_neg,), device=self.device)
+        neg_items = torch.randint(0, n_items, (batch_size * n_neg,), device=self.device)
 
         # Get embeddings
         neg_emb = self.item_tower(neg_items)  # (B*99, D)
-        neg_emb = neg_emb.view(B, n_neg, -1)  # (B, 99, D)
+        neg_emb = neg_emb.view(batch_size, n_neg, -1)  # (B, 99, D)
 
         # Calculate scores
         u_emb_exp = u_emb.unsqueeze(1)  # (B, 1, D)
@@ -164,27 +319,50 @@ class RetrievalPL(pl.LightningModule):
         return sampled_hits.mean()
 
     def validation_step(self, batch, batch_idx):
-        users, items, _ = batch
-        u_emb, i_emb = self(users, items)
+        # Per-type extraction: compute final_u_emb, final_i_emb, final_targets, final_user_ids
+        if self.user_tower_type == "transformer":
+            sequences, user_ids = batch
+            inputs = sequences[:, :-1]
+            final_targets = sequences[:, -1]
+            final_targets -= 1  # Shift back to 0-indexed items
+
+            final_u_emb, final_i_emb = self(inputs, final_targets)
+            # Usually, we have unique user_ids in the validation batch
+            final_user_ids = None
+            # final_user_ids = user_ids
+        else:
+            users, items, _ = batch
+            final_u_emb, final_i_emb = self(users, items)
+            final_targets = items
+            final_user_ids = users
+
+        # Common validation logic: loss, logs, and metrics
+        if final_u_emb.size(0) == 0:
+            return None
 
         batch_probs = None
-        if (
-            hasattr(self, "item_probs")
-            and self.item_probs is not None
-            and isinstance(self.item_probs, torch.Tensor)
-        ):
-            batch_probs = self.item_probs[items]
+        if hasattr(self, "item_probs") and self.item_probs is not None:
+            batch_probs = getattr(self, "item_probs")[final_targets]
 
-        loss = self.criterion(
-            u_emb, i_emb, candidate_probs=batch_probs, user_ids=users, item_ids=items
+        loss = self.val_criterion(
+            final_u_emb,
+            final_i_emb,
+            candidate_probs=batch_probs,
+            # final_user_ids used to mask collisions; Doesn't matter 0 or 1 index
+            # In fact, for transformer, user_ids are 0-indexed already
+            user_ids=final_user_ids,
+            item_ids=final_targets,
+            temperature=self.current_temperature,
         )
+
         self.log("val_loss", loss, prog_bar=True, on_step=False, on_epoch=True)
 
-        # Metrics
-        hit_rate = self._compute_in_batch_hit_rate(u_emb, i_emb)
+        hit_rate = self._compute_in_batch_hit_rate(final_u_emb, final_i_emb)
         self.log("val_hit_rate", hit_rate, prog_bar=True, on_step=False, on_epoch=True)
 
-        sampled_hit_rate = self._compute_sampled_hit_rate(users, u_emb, i_emb)
+        sampled_hit_rate = self._compute_sampled_hit_rate(
+            final_u_emb.size(0), final_u_emb, final_i_emb
+        )
         self.log(
             "val_sampled_hit10",
             sampled_hit_rate,
@@ -197,9 +375,17 @@ class RetrievalPL(pl.LightningModule):
 
     def on_validation_epoch_end(self):
         if self.val_users is not None and self.val_ground_truth is not None:
-            # 1. Get embeddings for validaton users
+            # 1. Get embeddings for validation users
             val_users_tensor = torch.tensor(self.val_users, device=self.device)
-            u_emb = self.user_tower(val_users_tensor)  # (500, D)
+
+            if self.user_tower_type == "transformer":
+                # Use encode for inference (last step embedding)
+                u_emb = self.user_tower.encode(val_users_tensor)
+                # val_ground_truth is list of ints, wrap in list for recall_at_k
+                targets = [[t] for t in self.val_ground_truth]
+            else:
+                u_emb = self.user_tower(val_users_tensor)  # (500, D)
+                targets = [self.val_ground_truth[u] for u in self.val_users]
 
             # 2. Get embeddings for ALL items
             # Assuming n_items fits in memory.
@@ -219,11 +405,9 @@ class RetrievalPL(pl.LightningModule):
             top_indices_np = top_indices.cpu().numpy()
 
             # 5. Calculate Metrics
-            targets = [self.val_ground_truth[u] for u in self.val_users]
-
-            r10 = recall_at_k(top_indices_np, targets, 10)
-            r50 = recall_at_k(top_indices_np, targets, 50)
-            r100 = recall_at_k(top_indices_np, targets, 100)
+            r10 = recall_at_k(top_indices_np, targets, 10)  # type: ignore
+            r50 = recall_at_k(top_indices_np, targets, 50)  # type: ignore
+            r100 = recall_at_k(top_indices_np, targets, 100)  # type: ignore
 
             self.log("val_recall_at_10", r10, prog_bar=True, on_epoch=True)
             self.log("val_recall_at_50", r50, prog_bar=True, on_epoch=True)
@@ -232,14 +416,19 @@ class RetrievalPL(pl.LightningModule):
     def configure_optimizers(self):  # type: ignore
         optimizer = optim.AdamW(
             self.parameters(),
-            lr=self.lr,
-            weight_decay=self.weight_decay,
-            betas=(self.adam_beta1, self.adam_beta2),
-            eps=self.adam_eps,
+            lr=self.optimizer_params.get("lr"),
+            weight_decay=self.optimizer_params.get("weight_decay"),
+            betas=(
+                self.optimizer_params.get("adam_beta1"),
+                self.optimizer_params.get("adam_beta2"),
+            ),
+            eps=self.optimizer_params.get("adam_eps"),
         )
 
-        if self.use_scheduler:
-            scheduler = get_linear_warmup_scheduler(optimizer, self.warmup_steps)
+        if self.optimizer_params.get("use_scheduler"):
+            scheduler = get_linear_warmup_scheduler(
+                optimizer, self.optimizer_params.get("warmup_steps")
+            )
             return {
                 "optimizer": optimizer,
                 "lr_scheduler": {
@@ -252,64 +441,88 @@ class RetrievalPL(pl.LightningModule):
 
 def train_retriever(args, vocab_sizes):
     logger = get_logger()
-    num_workers = getattr(args, "num_workers", 0)
+    num_workers = getattr(args, "num_workers")
     n_users, n_items = vocab_sizes
     logger.info(f"Initializing Retriever Training (Users: {n_users}, Items: {n_items})")
+
+    user_tower_type = getattr(args, "user_tower_type")
+    assert user_tower_type in ["mlp", "transformer"], (
+        "user_tower_type must be 'mlp' or 'transformer'"
+    )
 
     # 1. Data
     train_path = settings.processed_data_dir / "train.parquet"
     val_path = settings.processed_data_dir / "val.parquet"
 
-    logger.info("Loading training data...")
-    df_train = pd.read_parquet(train_path)
-    if args.retrieval_threshold is not None:
-        df_train = df_train[df_train["rating"] >= args.retrieval_threshold]
-
     # Calculate item popularity for LogQ correction
-    logger.info("Calculating item popularity...")
-    item_probs = compute_item_probabilities(n_items)
+    item_probs = None
+    if settings.use_logq_correction:
+        logger.info("Calculating item popularity...")
+        if user_tower_type == "transformer":
+            item_probs = compute_seq_item_probabilities(n_items)
+        else:
+            item_probs = compute_item_probabilities(n_items)
 
-    # Data Source Toggle
-    use_interactions_dataset = True  # Set to True to use InteractionsDataset
+    val_users_for_pl = None
+    val_ground_truth = None
 
-    if use_interactions_dataset:
-        del df_train
+    if user_tower_type == "transformer":
+        logger.info("Using Transformer User Tower with SequentialDataset")
+        train_dataset = SequentialDataset(str(train_path))
+        val_dataset = SequentialDataset(str(val_path))
+
+        # Sample validation sequences for metrics
+        all_sequences = val_dataset.sequences
+        N_val = len(all_sequences)
+        sample_size = min(500, N_val)
+        rng = np.random.default_rng(42)
+        indices = rng.choice(N_val, size=sample_size, replace=False)
+
+        subset_sequences = all_sequences[indices]
+        # input: all except last, target: last
+        val_inputs = subset_sequences[:, :-1]
+        val_targets_arr = subset_sequences[:, -1]
+        val_targets_arr -= 1  # Shift back to 0-indexed items
+
+        val_users_for_pl = val_inputs.tolist()
+        val_ground_truth = val_targets_arr.tolist()
+
+    elif user_tower_type == "mlp":
+        logger.info("Loading training data for MLP...")
         train_dataset = InteractionsDataset(
             str(train_path), positive_threshold=args.retrieval_threshold
         )
-    else:
-        user_histories = df_train.groupby("user_idx")["item_idx"].apply(list).to_dict()
-        del df_train
-        train_dataset = UniqueUserDataset(user_histories)
 
-    logger.info("Loading validaton data for metrics...")
-    df_val = pd.read_parquet(val_path)
-    if args.retrieval_threshold is not None:
-        df_val = df_val[df_val["rating"] >= args.retrieval_threshold]
+        logger.info("Loading validation data for metrics...")
+        df_val = pd.read_parquet(val_path)
+        if args.retrieval_threshold is not None:
+            df_val = df_val[df_val["rating"] >= args.retrieval_threshold]
 
-    unique_val_users = df_val["user_idx"].unique()
-    rng = np.random.default_rng(42)
-    sample_size = min(500, len(unique_val_users))
-    val_users = rng.choice(unique_val_users, size=sample_size, replace=False)
+        unique_val_users = df_val["user_idx"].unique()
+        rng = np.random.default_rng(42)
+        sample_size = min(500, len(unique_val_users))
+        val_users = rng.choice(unique_val_users, size=sample_size, replace=False)
 
-    # Ground truth for sampled users
-    df_val_subset = df_val[df_val["user_idx"].isin(val_users)]
-    val_ground_truth = (
-        df_val_subset.groupby("user_idx")["item_idx"].apply(list).to_dict()
-    )
+        # Ground truth for sampled users
+        df_val_subset = df_val[df_val["user_idx"].isin(val_users)]
+        val_ground_truth = (
+            df_val_subset.groupby("user_idx")["item_idx"].apply(list).to_dict()
+        )
 
-    # Convert to list for passing
-    val_users = val_users.tolist()
-    del df_val
+        # Convert to list for passing
+        val_users_for_pl = val_users.tolist()
+        del df_val
 
-    val_dataset = InteractionsDataset(
-        str(val_path), positive_threshold=args.retrieval_threshold
-    )
+        val_dataset = InteractionsDataset(
+            str(val_path), positive_threshold=args.retrieval_threshold
+        )
 
     train_loader = DataLoader(
-        train_dataset,
+        train_dataset,  # type: ignore
         batch_sampler=BatchSampler(
-            RandomSampler(train_dataset), batch_size=args.batch_size, drop_last=True
+            RandomSampler(train_dataset),  # type: ignore
+            batch_size=args.batch_size,
+            drop_last=True,
         ),
         collate_fn=collate_fn_numpy_to_tensor,
         num_workers=num_workers,
@@ -317,10 +530,12 @@ def train_retriever(args, vocab_sizes):
         persistent_workers=(num_workers > 0),
     )
     val_loader = DataLoader(
-        val_dataset,
+        val_dataset,  # type: ignore
         batch_sampler=BatchSampler(
-            SequentialSampler(val_dataset), batch_size=args.batch_size, drop_last=True
-        ),
+            SequentialSampler(val_dataset),  # type: ignore
+            batch_size=args.batch_size,
+            drop_last=True,
+        ),  #
         collate_fn=collate_fn_numpy_to_tensor,
         num_workers=num_workers,
         # Ensure batch size is consistent for in-batch consistency metrics if needed
@@ -335,30 +550,57 @@ def train_retriever(args, vocab_sizes):
         settings.embed_dim,
         settings.tower_out_dim,
         settings.towers_hidden_dims,
-        lr=args.lr,
-        weight_decay=args.weight_decay,
-        adam_beta1=args.adam_beta1,
-        adam_beta2=args.adam_beta2,
-        adam_eps=args.adam_eps,
-        use_scheduler=args.use_scheduler,
-        warmup_steps=args.warmup_steps,
+        settings.use_projection,
+        optimizer_params={
+            "lr": args.lr,
+            "weight_decay": args.weight_decay,
+            "adam_beta1": args.adam_beta1,
+            "adam_beta2": args.adam_beta2,
+            "adam_eps": args.adam_eps,
+            "use_scheduler": args.use_scheduler,
+            "warmup_steps": args.warmup_steps,
+        },
         item_probs=item_probs,
         temperature=args.temperature,
-        val_users=val_users,
+        learnable_temperature=settings.learnable_temperature,
+        val_users=val_users_for_pl,
         val_ground_truth=val_ground_truth,
+        user_tower_type=user_tower_type,
+        transformer_params={
+            "max_seq_len": settings.max_seq_len,
+            "n_heads": settings.transformer_heads,
+            "n_layers": settings.transformer_layers,
+            "dropout": settings.transformer_dropout,
+            "swiglu_hidden_dim": settings.swiglu_hidden_dim,
+        },
+        negative_sampling_strategy=settings.negative_sampling_strategy,
+        num_negatives=settings.num_negatives,
+        loss_type=settings.retrieval_in_batch_loss_type,
     )
 
     # 3. Trainer
     wandb_logger = WandbLogger(
-        project="nanoRecSys", name="retriever_run", config=vars(args)
+        project="nanoRecSys",
+        name=getattr(args, "wandb_run_name", None) or "retriever_run",
+        config=vars(args),
     )
     checkpoint_callback = ModelCheckpoint(
         dirpath=settings.artifacts_dir,
-        filename="retriever-{epoch:02d}-{val_recall_at_50:.4f}",
+        filename="retriever-{epoch:02d}-{val_recall_at_10:.4f}",
         save_top_k=1,
-        monitor="val_recall_at_50",
+        monitor="val_recall_at_10",
         mode="max",
+        save_last=False,
+        every_n_epochs=args.check_val_every_n_epoch,
+    )
+
+    # https://github.com/Lightning-AI/pytorch-lightning/issues/19325
+    last_checkpoint_callback = ModelCheckpoint(
+        dirpath=settings.artifacts_dir,
+        filename="latest",
+        save_top_k=1,
         save_last=True,
+        every_n_epochs=args.check_val_every_n_epoch,
     )
 
     trainer = pl.Trainer(
@@ -366,11 +608,12 @@ def train_retriever(args, vocab_sizes):
         max_steps=getattr(args, "max_steps", -1),
         limit_train_batches=getattr(args, "limit_train_batches", 1.0),
         accelerator="auto",
-        devices=1,
+        devices="auto",
         logger=wandb_logger,
-        callbacks=[checkpoint_callback],
+        callbacks=[checkpoint_callback, last_checkpoint_callback],
         log_every_n_steps=10,
         check_val_every_n_epoch=args.check_val_every_n_epoch,
+        enable_progress_bar=args.enable_progress_bar,
     )
 
     ckpt_path = getattr(args, "ckpt_path", None)
@@ -389,9 +632,14 @@ def train_retriever(args, vocab_sizes):
             build_user_embeddings,
         )
 
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        model.to(device)
         build_item_embeddings(
-            model=model.item_tower, device=model.device, batch_size=args.batch_size
+            model=model.item_tower, device=device, batch_size=args.batch_size
         )
         build_user_embeddings(
-            model=model.user_tower, device=model.device, batch_size=args.batch_size
+            model=model.user_tower,
+            device=device,
+            batch_size=args.batch_size,
+            user_tower_type=args.user_tower_type,
         )

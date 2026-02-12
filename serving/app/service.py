@@ -21,7 +21,7 @@ import pandas as pd
 import torch
 
 from nanoRecSys.config import settings
-from nanoRecSys.models.ranker import RankerModel
+from nanoRecSys.models.ranker import MLPRanker
 from nanoRecSys.models.towers import UserTower
 from nanoRecSys.utils.utils import compute_item_probabilities
 
@@ -119,7 +119,7 @@ class RecommendationService:
 
         # Load Ranker
         logger.info("Loading Ranker...")
-        self.ranker_model = RankerModel(
+        self.ranker_model = MLPRanker(
             input_dim=settings.tower_out_dim,
             num_genres=num_genres,
             num_years=num_years,

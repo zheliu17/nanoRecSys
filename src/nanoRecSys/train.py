@@ -13,16 +13,30 @@
 # limitations under the License.
 
 import argparse
+
 from nanoRecSys.config import settings
-from nanoRecSys.training import train_retriever, train_ranker
-from nanoRecSys.utils.utils import get_vocab_sizes
+from nanoRecSys.training import train_ranker, train_retriever
 from nanoRecSys.utils.logging_config import setup_logger
+from nanoRecSys.utils.utils import get_vocab_sizes
 
 
 def optional_float(v):
     if v is None or str(v).lower() == "none":
         return None
     return float(v)
+
+
+def optional_bool(v):
+    if v is None or str(v).lower() == "none":
+        return None
+    if isinstance(v, bool):
+        return v
+    s = str(v).strip().lower()
+    if s in ("Fasle", "false", "f", "0", "no", "n"):
+        return False
+    if s in ("True", "true", "t", "1", "yes", "y"):
+        return True
+    raise argparse.ArgumentTypeError(f"Boolean value expected, got: {v}")
 
 
 def main(args=None):
@@ -41,6 +55,13 @@ def main(args=None):
         type=int,
         default=settings.num_workers,
         help="Number of workers for DataLoader.",
+    )
+    parser.add_argument(
+        "--user_tower_type",
+        type=str,
+        default="transformer",
+        choices=["mlp", "transformer"],
+        help="Type of User Tower model: 'mlp' (ID-based) or 'transformer' (sequence-based).",
     )
     parser.add_argument(
         "--retrieval_threshold",
@@ -104,6 +125,12 @@ def main(args=None):
         help="Path to checkpoint to resume from, or 'last' to resume from latest. If None, starts training from scratch.",
     )
     parser.add_argument(
+        "--wandb_run_name",
+        type=str,
+        default=None,
+        help="W&B run name. If None, WandB will auto-generate a name.",
+    )
+    parser.add_argument(
         "--item_lr",
         type=float,
         default=settings.item_embedding_lr,
@@ -135,9 +162,9 @@ def main(args=None):
     )
     parser.add_argument(
         "--use_scheduler",
-        type=bool,
+        type=optional_bool,
         default=settings.use_scheduler,
-        help="Whether to use a learning rate scheduler.",
+        help="Whether to use a learning rate scheduler (true/false).",
     )
     parser.add_argument(
         "--warmup_steps",
@@ -153,9 +180,9 @@ def main(args=None):
     )
     parser.add_argument(
         "--build_embeddings",
-        type=bool,
+        type=optional_bool,
         default=settings.build_embeddings,
-        help="Generate user and item embeddings into artifacts after training.",
+        help="Generate user and item embeddings into artifacts after training (true/false).",
     )
     parser.add_argument(
         "--max_steps",
@@ -169,6 +196,12 @@ def main(args=None):
         default=settings.limit_train_batches,
         help="How much of training dataset to check (float = fraction, int = num_batches).",
     )
+    parser.add_argument(
+        "--enable_progress_bar",
+        type=optional_bool,
+        default=True,
+        help="Enable progress bar (true/false). Accepts True/False/true/false/1/0/yes/no.",
+    )
 
     if args is None:
         args = parser.parse_args()
@@ -179,6 +212,33 @@ def main(args=None):
         final_dict = vars(default_args)
         final_dict.update(provided_dict)
         args = argparse.Namespace(**final_dict)
+
+    if args.user_tower_type == "transformer":
+        suffix = "_sasrec_combined"  # "_" + "sasrec_combined"
+        args.user_emb_path = (
+            settings.sasrec_user_embs_npy_path / f"user_embeddings{suffix}.npy"
+        )
+    else:
+        suffix = ""
+        args.user_emb_path = settings.artifacts_dir / "user_embeddings.npy"
+
+    args.train_interactions_path = (
+        settings.processed_data_dir / f"train{suffix}.parquet"
+    )
+    args.train_hard_negatives_path = (
+        settings.processed_data_dir / f"train{suffix}_negatives_hard.parquet"
+    )
+    args.train_random_negatives_path = (
+        settings.processed_data_dir / f"train{suffix}_negatives_random.parquet"
+    )
+
+    args.val_interactions_path = settings.processed_data_dir / f"val{suffix}.parquet"
+    args.val_hard_negatives_path = (
+        settings.processed_data_dir / f"val{suffix}_negatives_hard.parquet"
+    )
+    args.val_random_negatives_path = (
+        settings.processed_data_dir / f"val{suffix}_negatives_random.parquet"
+    )
 
     vocab_sizes = get_vocab_sizes()
     logger.info(f"Vocab sizes: Users={vocab_sizes[0]}, Items={vocab_sizes[1]}")

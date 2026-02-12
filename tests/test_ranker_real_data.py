@@ -12,14 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import pandas as pd
 import numpy as np
+import pandas as pd
+import pytest
 import torch
 import torch.nn as nn
 import torch.optim as optim
-import pytest
-from nanoRecSys.models.ranker import RankerModel
+
 from nanoRecSys.config import settings
+from nanoRecSys.models.ranker import MLPRanker
 from nanoRecSys.utils.utils import compute_item_probabilities
 
 
@@ -83,7 +84,7 @@ def test_ranker_overfits_real_data():
     )
 
     torch.manual_seed(42)
-    model = RankerModel(
+    model = MLPRanker(
         input_dim=input_dim,
         hidden_dims=settings.ranker_hidden_dims,
         num_genres=num_genres,

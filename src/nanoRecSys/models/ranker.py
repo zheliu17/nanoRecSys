@@ -16,15 +16,15 @@ import torch
 import torch.nn as nn
 
 
-class RankerModel(nn.Module):
+class MLPRanker(nn.Module):
     def __init__(
         self,
-        input_dim=128,
-        hidden_dims=[256, 128, 64],
-        num_genres=20,
-        genre_dim=16,
-        num_years=100,
-        year_dim=8,
+        input_dim,
+        hidden_dims,
+        num_genres,
+        genre_dim,
+        num_years,
+        year_dim,
     ):
         super().__init__()
 
@@ -36,7 +36,7 @@ class RankerModel(nn.Module):
         nn.init.kaiming_uniform_(self.year_embeddings.weight, nonlinearity="relu")
 
         # Example input features:
-        # User (128) + Item (128) + Prod (128) + Pop (1) + Year (8) + Genre (16) + IsUnknown (1)
+        # User (256) + Item (256) + Prod (256) + Pop (1) + Year (8) + Genre (16) + IsUnknown (1)
         self.concat_dim = (
             input_dim + input_dim + input_dim + 1 + year_dim + genre_dim + 1
         )
@@ -109,7 +109,6 @@ class RankerModel(nn.Module):
         i_emb_masked = item_emb * mask
 
         # Element-wise product (with MASKED item)
-        # If item is unknown (masked), dot product will be 0, which is correct
         # Explicit Product https://arxiv.org/abs/1708.05031
         dot_product = user_emb * i_emb_masked  # (B, input_dim)
 

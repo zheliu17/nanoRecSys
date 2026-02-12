@@ -12,18 +12,23 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import torch
-import pandas as pd
-import numpy as np
 import sys
+
+import numpy as np
+import pandas as pd
+import torch
 from tqdm import tqdm
+
 from nanoRecSys.config import settings
-from nanoRecSys.eval.metrics import compute_batch_metrics
-from nanoRecSys.models.ranker import RankerModel
 from nanoRecSys.data.datasets import load_item_metadata
-from nanoRecSys.utils.utils import get_vocab_sizes, compute_item_probabilities
+from nanoRecSys.eval.metrics import compute_batch_metrics
+from nanoRecSys.models.ranker import MLPRanker
 from nanoRecSys.utils.logging_config import get_logger
-from nanoRecSys.training.mine_negatives import load_all_positives
+from nanoRecSys.utils.utils import (
+    compute_item_probabilities,
+    get_vocab_sizes,
+    load_all_positives,
+)
 
 
 class OfflineEvaluator:
@@ -67,6 +72,7 @@ class OfflineEvaluator:
         self.user_embs = None
         self.item_embs = None
         self.ranker = None
+        self.user_tower = None  # For Transformer
 
         # Cache for metadata
         self.genre_matrix = None
@@ -78,12 +84,10 @@ class OfflineEvaluator:
         logger.info(
             f"Preparing sampled candidates (1 positive + 100 negatives) using {self.sample_strategy} sampling..."
         )
-        # Ensure we have all positives loaded
-        logger.warning(
-            f"Filtering known positives based on ranker_positive_threshold ({settings.ranker_positive_threshold}). "
-            "If you want to adjust what is considered a positive for exclusion, change ranker_positive_threshold."
+
+        all_positives = load_all_positives(
+            threshold=settings.evaluation_positive_threshold
         )
-        all_positives = load_all_positives()
 
         n_neg = 100
         n_samples = len(self.test_users)
@@ -190,22 +194,21 @@ class OfflineEvaluator:
         logger = get_logger()
         logger.info("Loading test splits...")
         test_df = pd.read_parquet(settings.processed_data_dir / "test.parquet")
-        test_df = test_df[test_df["rating"] >= settings.retrieval_threshold]
+        test_df = test_df[test_df["rating"] >= settings.evaluation_positive_threshold]
 
         test_user_groups = test_df.groupby("user_idx")["item_idx"].apply(list)
         # Copy arrays to ensure they are writable (avoids PyTorch warnings during indexing)
         return test_user_groups.index.values.copy(), test_user_groups.values.copy()
 
-    def _load_embeddings(self):
-        """Load pre-computed embeddings from disk."""
+    def _load_user_embeddings(self):
+        """Load pre-computed user embeddings from disk."""
         logger = get_logger()
-        logger.info("Loading embeddings from disk...")
+        logger.info("Loading user embeddings from disk...")
         u_path = settings.artifacts_dir / "user_embeddings.npy"
-        i_path = settings.artifacts_dir / "item_embeddings.npy"
 
-        if not u_path.exists() or not i_path.exists():
+        if not u_path.exists():
             raise FileNotFoundError(
-                f"Embeddings not found at {settings.artifacts_dir}. "
+                f"User embeddings not found at {u_path}. "
                 "Please run `python src/indexing/build_embeddings.py --mode all` first."
             )
 
@@ -213,11 +216,34 @@ class OfflineEvaluator:
         self.user_embs = (
             torch.from_numpy(np.load(u_path).copy()).to(self.device).float()
         )
+        logger.info(f"Loaded Users: {self.user_embs.shape}")
+
+    def _load_item_embeddings(self):
+        """Load pre-computed item embeddings from disk."""
+        logger = get_logger()
+        logger.info("Loading item embeddings from disk...")
+        i_path = settings.artifacts_dir / "item_embeddings.npy"
+
+        if not i_path.exists():
+            raise FileNotFoundError(
+                f"Item embeddings not found at {i_path}. "
+                "Please run `python src/indexing/build_embeddings.py --mode all` first."
+            )
+
+        # Copy numpy arrays to ensure writability before conversion
         self.item_embs = (
             torch.from_numpy(np.load(i_path).copy()).to(self.device).float()
         )
+        logger.info(f"Loaded Items: {self.item_embs.shape}")
+
+    def _load_embeddings(self):
+        """Load both pre-computed user and item embeddings from disk."""
+        logger = get_logger()
+        logger.info("Loading embeddings from disk...")
+        self._load_user_embeddings()
+        self._load_item_embeddings()
         logger.info(
-            f"Loaded Users: {self.user_embs.shape}, Items: {self.item_embs.shape}"
+            f"Loaded Users: {self.user_embs.shape}, Items: {self.item_embs.shape}"  # type: ignore
         )
 
     def _load_ranker(self):
@@ -267,7 +293,7 @@ class OfflineEvaluator:
             self.ranker_item_embs = self.item_embs
 
         # 3. Model
-        self.ranker = RankerModel(
+        self.ranker = MLPRanker(
             input_dim=settings.tower_out_dim,
             hidden_dims=settings.ranker_hidden_dims,
             num_genres=n_genres,
@@ -339,12 +365,71 @@ class OfflineEvaluator:
 
         return {k: v / len(self.test_users) for k, v in metrics_sum.items()}
 
+    def _compute_and_accumulate(
+        self,
+        batch_u_emb,
+        batch_targets,
+        metrics_sum,
+        candidates=None,
+        log_p=None,
+    ):
+        """
+        Compute scores and metrics for a batch of users.
+        Shared logic for eval_retrieval and eval_sequential_retrieval.
+        """
+        if self.sampled:
+            if candidates is None:
+                raise ValueError("Candidates must be provided for sampled evaluation.")
+
+            # Sampled Scoring
+            batch_i_emb = self.item_embs[candidates]  # type: ignore
+            # Compute Score: (B, 1, Dim) * (B, 101, Dim) -> sum -> (B, 101)
+            scores = (batch_u_emb.unsqueeze(1) * batch_i_emb).sum(dim=2)
+
+            # 1. Standard
+            _, topk_std = torch.topk(scores, k=self.max_k, dim=1)
+            preds_std = torch.gather(candidates, 1, topk_std).cpu().numpy()
+            res_std = self._batch_metrics(preds_std, batch_targets)
+            self._accumulate_metrics(metrics_sum, res_std, prefix="Standard_")
+
+            # 2. LogQ
+            if log_p is not None:
+                cand_log_p = log_p[candidates]
+                scores_logq = (scores / settings.temperature) + cand_log_p
+                _, topk_logq = torch.topk(scores_logq, k=self.max_k, dim=1)
+                preds_logq = torch.gather(candidates, 1, topk_logq).cpu().numpy()
+                res_logq = self._batch_metrics(preds_logq, batch_targets)
+                self._accumulate_metrics(metrics_sum, res_logq, prefix="LogQ_")
+
+        else:
+            # Full Retrieval Scoring
+            scores = torch.matmul(batch_u_emb, self.item_embs.T)  # type: ignore
+
+            # 1. Standard
+            _, topk_std = torch.topk(scores, k=self.max_k, dim=1)
+            preds_std = topk_std.cpu().numpy()
+            res_std = self._batch_metrics(preds_std, batch_targets)
+            self._accumulate_metrics(metrics_sum, res_std, prefix="Standard_")
+
+            # 2. LogQ
+            if log_p is not None:
+                scores_logq = (scores / settings.temperature) + log_p
+                _, topk_logq = torch.topk(scores_logq, k=self.max_k, dim=1)
+                preds_logq = topk_logq.cpu().numpy()
+                res_logq = self._batch_metrics(preds_logq, batch_targets)
+                self._accumulate_metrics(metrics_sum, res_logq, prefix="LogQ_")
+
     def eval_retrieval(self):
-        """Evaluate Two-Tower Retrieval (Standard vs LogQ)."""
+        """Evaluate Two-Tower Retrieval."""
         self._load_embeddings()
-        log_p = compute_item_probabilities(
-            self.n_items, device=self.device, return_log_probs=True
-        )
+        log_p = None
+        if (
+            settings.use_logq_correction
+            and settings.negative_sampling_strategy == "in-batch"
+        ):
+            log_p = compute_item_probabilities(
+                self.n_items, device=self.device, return_log_probs=True
+            )
 
         metrics_sum = {}
 
@@ -357,45 +442,17 @@ class OfflineEvaluator:
             # Embeddings
             batch_u_emb = self.user_embs[batch_u_idx]  # type: ignore # (B, Dim)
 
+            batch_candidates = None
             if self.sampled:
-                batch_candidates = self.test_candidates[i:idx_end]  # (B, 101)
+                batch_candidates = self.test_candidates[i:idx_end]
 
-                # Item embs for candidates
-                batch_i_emb = self.item_embs[batch_candidates]  # type: ignore # (B, 101, Dim)
-
-                # Compute Score: (B, 1, Dim) * (B, 101, Dim) -> sum -> (B, 101)
-                scores = (batch_u_emb.unsqueeze(1) * batch_i_emb).sum(dim=2)
-
-                # 1. Standard
-                _, topk_std = torch.topk(scores, k=self.max_k, dim=1)
-                preds_std = torch.gather(batch_candidates, 1, topk_std).cpu().numpy()
-                res_std = self._batch_metrics(preds_std, batch_targets)
-                self._accumulate_metrics(metrics_sum, res_std, prefix="Standard_")
-
-                # 2. LogQ
-                cand_log_p = log_p[batch_candidates]  # (B, 101)
-                scores_logq = (scores / settings.temperature) + cand_log_p
-                _, topk_logq = torch.topk(scores_logq, k=self.max_k, dim=1)
-                preds_logq = torch.gather(batch_candidates, 1, topk_logq).cpu().numpy()
-                res_logq = self._batch_metrics(preds_logq, batch_targets)
-                self._accumulate_metrics(metrics_sum, res_logq, prefix="LogQ_")
-                continue
-
-            # Scores (B, N_items)
-            scores = torch.matmul(batch_u_emb, self.item_embs.T)  # type: ignore
-
-            # 1. Standard (No Correction)
-            _, topk_std = torch.topk(scores, k=self.max_k, dim=1)
-            preds_std = topk_std.cpu().numpy()
-            res_std = self._batch_metrics(preds_std, batch_targets)
-            self._accumulate_metrics(metrics_sum, res_std, prefix="Standard_")
-
-            # 2. LogQ Correction
-            scores_logq = (scores / settings.temperature) + log_p
-            _, topk_logq = torch.topk(scores_logq, k=self.max_k, dim=1)
-            preds_logq = topk_logq.cpu().numpy()
-            res_logq = self._batch_metrics(preds_logq, batch_targets)
-            self._accumulate_metrics(metrics_sum, res_logq, prefix="LogQ_")
+            self._compute_and_accumulate(
+                batch_u_emb,
+                batch_targets,
+                metrics_sum,
+                candidates=batch_candidates,
+                log_p=log_p,
+            )
 
         return {k: v / len(self.test_users) for k, v in metrics_sum.items()}
 
@@ -456,7 +513,7 @@ class OfflineEvaluator:
             perm = torch.randperm(flat_pop.size(0), device=self.device)
             flat_pop = flat_pop[perm]
 
-        with torch.no_grad():
+        with torch.inference_mode():
             ranker_scores = self.ranker(
                 user_emb=flat_u_emb,
                 item_emb=flat_i_emb,
@@ -508,7 +565,7 @@ class OfflineEvaluator:
             if self.sampled:
                 candidates = self.test_candidates[i:idx_end]
             else:
-                # --- A. Retrieval (LogQ) ---
+                # --- A. Retrieval ---
                 scores = torch.matmul(batch_u_emb, self.item_embs.T)  # type: ignore
                 scores = scores / settings.temperature  # No logQ corrections
 
@@ -536,6 +593,128 @@ class OfflineEvaluator:
                 metrics_sum[k] = metrics_sum.get(k, 0.0) + v
 
         return {k: v / len(self.test_users) for k, v in metrics_sum.items()}
+
+    def _load_transformer_user_tower(self):
+        logger = get_logger()
+        logger.info("Loading Transformer User Tower...")
+
+        from nanoRecSys.models.towers import ItemTower, TransformerUserTower
+
+        # Note: We duplicate ItemTower with same config to match state_dict keys
+        # if the model was trained with shared_embedding=item_tower.
+        dummy_item_tower = ItemTower(
+            vocab_size=self.n_items,
+            embed_dim=settings.embed_dim,
+            output_dim=settings.tower_out_dim,
+            hidden_dims=settings.towers_hidden_dims,
+            use_projection=settings.use_projection,
+        )
+
+        self.user_tower = TransformerUserTower(
+            vocab_size=self.n_items,
+            embed_dim=settings.tower_out_dim,
+            output_dim=settings.tower_out_dim,
+            max_seq_len=settings.max_seq_len,
+            n_heads=settings.transformer_heads,
+            n_layers=settings.transformer_layers,
+            dropout=settings.transformer_dropout,
+            swiglu_hidden_dim=settings.swiglu_hidden_dim,
+            shared_embedding=dummy_item_tower,
+        ).to(self.device)
+
+        path = settings.artifacts_dir / "user_tower.pth"
+        if not path.exists():
+            raise FileNotFoundError(f"User tower model not found at {path}")
+
+        try:
+            self.user_tower.load_state_dict(torch.load(path, map_location=self.device))
+        except RuntimeError as e:
+            logger.warning(f"Strict loading failed, trying strict=False: {e}")
+            self.user_tower.load_state_dict(
+                torch.load(path, map_location=self.device), strict=False
+            )
+
+        self.user_tower.eval()
+
+    def eval_sequential_retrieval(self):
+        """Evaluate Sequential Retrieval using Transformer User Tower.
+
+        Auto-regressive evaluation with teacher forcing:
+        if user sequence is [i1, i2, i3], we input [i1, i2] to predict i3,
+        then input [i1, i2, i3] to predict next (if available).
+        """
+        self._load_item_embeddings()
+        self._load_transformer_user_tower()
+
+        if settings.evaluation_positive_threshold > 0.0:
+            self.logger.warning(
+                "Sequential retrieval evaluation loads all pre-built sequences without filtering."
+                "settings.evaluation_positive_threshold is ignored."
+            )
+
+        seq_path = settings.processed_data_dir / "seq_test_sequences.npy"
+        if not seq_path.exists():
+            raise FileNotFoundError(f"Sequential test data not found at {seq_path}")
+
+        sequences = np.load(seq_path)
+
+        # Note: sequences are 1-based (0 is padding). Targets are items.
+        # We assume item_embs are 0-based (matching twotower mode).
+        targets_1based = sequences[:, -1]
+        targets_0based = targets_1based - 1
+
+        if np.any(targets_0based < 0):
+            self.logger.warning(
+                "Found targets < 0 after shifting. Check indexing logic."
+            )
+
+        self.test_targets = [[t] for t in targets_0based]
+
+        # Prepare Sampled Candidates if needed
+        if self.sampled:
+            user_path = settings.processed_data_dir / "seq_test_user_ids.npy"
+            test_user_ids = np.load(user_path)
+            self.test_users = test_user_ids
+            self._prepare_sampled_candidates()
+
+        log_p = None
+        if settings.use_logq_correction:
+            log_p = compute_item_probabilities(
+                self.n_items, device=self.device, return_log_probs=True
+            )
+
+        metrics_sum = {}
+        dataset_size = len(sequences)
+        self.logger.info(f"Evaluating on {dataset_size} sequences...")
+
+        for i in tqdm(range(0, dataset_size, self.batch_size)):
+            batch_seqs = (
+                torch.from_numpy(sequences[i : i + self.batch_size])
+                .long()
+                .to(self.device)
+            )
+
+            # Helper: input is all but last, target is last
+            batch_inputs = batch_seqs[:, :-1]
+            batch_targets_0based = self.test_targets[i : i + self.batch_size]
+
+            with torch.inference_mode():
+                # TransformerUserTower.encode expects (B, L)
+                batch_u_emb = self.user_tower.encode(batch_inputs)  # type: ignore
+
+            batch_candidates = None
+            if self.sampled:
+                batch_candidates = self.test_candidates[i : i + self.batch_size]
+
+            self._compute_and_accumulate(
+                batch_u_emb,
+                batch_targets_0based,
+                metrics_sum,
+                candidates=batch_candidates,
+                log_p=log_p,
+            )
+
+        return {k: v / dataset_size for k, v in metrics_sum.items()}
 
     def eval_ranker_new_items(self):
         """Evaluate Ranker on simulated new items (all candidates treated as unknown)."""
@@ -625,6 +804,7 @@ if __name__ == "__main__":
         choices=[
             "popularity",
             "twotower",
+            "transformer_retrieval",
             "ranker",
             "ranker_new",
             "ranker_sensitivity",
@@ -657,6 +837,8 @@ if __name__ == "__main__":
         results = evaluator.eval_popularity()
     elif args.model == "twotower":
         results = evaluator.eval_retrieval()
+    elif args.model == "transformer_retrieval":
+        results = evaluator.eval_sequential_retrieval()
     elif args.model == "ranker":
         results = evaluator.eval_ranker()
     elif args.model == "ranker_new":

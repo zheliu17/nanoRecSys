@@ -77,6 +77,7 @@ class Settings(BaseSettings):
     transformer_heads: int = 8
     transformer_layers: int = 4
     transformer_dropout: float = 0.2
+    positional_embedding_type: str = "rope"  # "rope" or "absolute"
     rope_base: int = 500
     # None to use default, rounded 8/3* embed_dim
     swiglu_hidden_dim: Union[int, None] = 1024

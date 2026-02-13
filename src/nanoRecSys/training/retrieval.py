@@ -587,7 +587,7 @@ def train_retriever(args, vocab_sizes):
     checkpoint_callback = ModelCheckpoint(
         dirpath=settings.artifacts_dir,
         filename="retriever-{epoch:02d}-{val_recall_at_10:.4f}",
-        save_top_k=1,
+        save_top_k=3,
         monitor="val_recall_at_10",
         mode="max",
         save_last=False,

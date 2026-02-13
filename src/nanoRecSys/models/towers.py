@@ -12,13 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import math
 from typing import List, Optional
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from nanoRecSys.models.layers import RMSNorm, RotaryEmbedding, TransformerBlockWithRoPE
+from nanoRecSys.config import settings
+from nanoRecSys.models.layers import RMSNorm, RotaryEmbedding, TransformerBlock
 
 
 class Tower(nn.Module):
@@ -88,6 +90,7 @@ class TransformerUserTower(nn.Module):
         dropout: float,
         swiglu_hidden_dim: Optional[int] = None,
         shared_embedding: Optional[nn.Module] = None,
+        pos_embedding_type: str = settings.positional_embedding_type,
     ):
         super().__init__()
 
@@ -100,6 +103,14 @@ class TransformerUserTower(nn.Module):
 
         # No absolute positional embedding forRoPE
         # self.pos_embedding = nn.Embedding(max_seq_len, embed_dim)
+        self.pos_embedding_type = pos_embedding_type
+        if self.pos_embedding_type == "absolute":
+            self.pos_embedding = nn.Embedding(max_seq_len, embed_dim)
+            self.rope = None
+        else:
+            head_dim = embed_dim // n_heads
+            self.rope = RotaryEmbedding(head_dim, max_seq_len)
+
         self.emb_dropout = nn.Dropout(dropout)
 
         # SwiGLU: round up to nearest multiple of 256
@@ -109,7 +120,7 @@ class TransformerUserTower(nn.Module):
 
         self.blocks = nn.ModuleList(
             [
-                TransformerBlockWithRoPE(
+                TransformerBlock(
                     d_model=embed_dim,
                     n_heads=n_heads,
                     dim_feedforward=swiglu_hidden_dim,
@@ -118,10 +129,6 @@ class TransformerUserTower(nn.Module):
                 for _ in range(n_layers)
             ]
         )
-
-        # Initialize RoPE Generator with head_dim
-        head_dim = embed_dim // n_heads
-        self.rope = RotaryEmbedding(head_dim, max_seq_len)
 
         # Causal Mask Cache
         # Shape: (1, 1, max_seq_len, max_seq_len)
@@ -135,6 +142,40 @@ class TransformerUserTower(nn.Module):
         self.norm = RMSNorm(embed_dim)
 
         self.projection = nn.Linear(embed_dim, output_dim)
+
+        self.apply(self._init_weights)
+        self._apply_residual_scaling(n_layers)
+
+    def _init_weights(self, module: nn.Module):
+        if isinstance(module, nn.Linear):
+            nn.init.xavier_uniform_(module.weight)
+            if module.bias is not None:
+                nn.init.zeros_(module.bias)
+
+        # elif isinstance(module, nn.Embedding):
+        #     nn.init.normal_(module.weight, mean=0.0, std=0.02)
+        #     if module.padding_idx is not None:
+        #         module.weight.data[module.padding_idx].zero_()
+
+        # elif isinstance(module, (nn.LayerNorm, RMSNorm)):
+        #     if hasattr(module, "bias") and module.bias is not None:
+        #         nn.init.zeros_(module.bias)  # type: ignore
+        #     if hasattr(module, "weight") and module.weight is not None:
+        #         nn.init.ones_(module.weight)
+
+    def _apply_residual_scaling(self, n_layers):
+        """
+        Scales the weights of the residual projection layers by 1/sqrt(2 * L).
+        """
+        scale_factor = 1.0 / math.sqrt(2.0 * n_layers)
+
+        for block in self.blocks:
+            # 1. Attention Output Projection (attn.out_proj)
+            # We scale the existing Xavier weights down
+            block.attn.out_proj.weight.data.mul_(scale_factor)  # type: ignore
+
+            # 2. FeedForward Output Projection (mlp.w_2 in SwiGLU)
+            block.mlp.w_2.weight.data.mul_(scale_factor)  # type: ignore
 
     def forward(self, item_seq: torch.Tensor) -> torch.Tensor:
         # item_seq: (batch, seq_len)
@@ -156,6 +197,11 @@ class TransformerUserTower(nn.Module):
             valid_vals, item_seq - 1, torch.zeros_like(item_seq)
         )
         x = self.embedding(lookup_indices)
+
+        if self.pos_embedding_type == "absolute":
+            positions = torch.arange(seq_len, device=x.device).unsqueeze(0)
+            x = x + self.pos_embedding(positions)
+
         # Manually zero out padding positions
         x = x * valid_vals.unsqueeze(-1).type_as(x)
         x = self.emb_dropout(x)

@@ -36,6 +36,7 @@ class RMSNorm(nn.Module):
 class RotaryEmbedding(nn.Module):
     def __init__(self, dim, max_seq_len=512):
         super().__init__()
+        assert dim % 2 == 0, "RoPE dimension must be even"
         rope_base = settings.rope_base
         inv_freq = 1.0 / (rope_base ** (torch.arange(0, dim, 2).float() / dim))
         self.register_buffer("inv_freq", inv_freq)
@@ -44,8 +45,8 @@ class RotaryEmbedding(nn.Module):
         t = torch.arange(max_seq_len, dtype=inv_freq.dtype)
         freqs = torch.outer(t, inv_freq)
         emb = torch.cat((freqs, freqs), dim=-1)
-        self.register_buffer("cached_cos", emb.cos())
-        self.register_buffer("cached_sin", emb.sin())
+        self.register_buffer("cached_cos", emb.cos(), persistent=False)
+        self.register_buffer("cached_sin", emb.sin(), persistent=False)
 
     def forward(self, x, seq_len):
         if (
@@ -175,7 +176,7 @@ class SwiGLU(nn.Module):
         return self.w_2(x)
 
 
-class TransformerBlockWithRoPE(nn.Module):
+class TransformerBlock(nn.Module):
     def __init__(self, d_model, n_heads, dim_feedforward, dropout=0.1):
         super().__init__()
         self.attn = RoPEAttentionLayer(d_model, n_heads, dropout)
@@ -184,16 +185,19 @@ class TransformerBlockWithRoPE(nn.Module):
 
         # Replace standard MLP with SwiGLU
         self.mlp = SwiGLU(d_model, dim_feedforward, dropout)
+        self.dropout = nn.Dropout(dropout)
 
     def forward(self, x, mask=None, rope=None):
         # Pre-Norm implementation: x = x + f(norm(x))
 
         # Self Attention
         x_norm = self.norm1(x)
-        x = x + self.attn(x_norm, mask, rope)
+        attn_out = self.attn(x_norm, mask, rope)
+        x = x + self.dropout(attn_out)
 
         # FFN
         x_norm = self.norm2(x)
-        x = x + self.mlp(x_norm)
+        mlp_out = self.mlp(x_norm)
+        x = x + self.dropout(mlp_out)
 
         return x

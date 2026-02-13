@@ -59,7 +59,7 @@ def main(args=None):
     parser.add_argument(
         "--user_tower_type",
         type=str,
-        default="transformer",
+        default=settings.user_tower_type,
         choices=["mlp", "transformer"],
         help="Type of User Tower model: 'mlp' (ID-based) or 'transformer' (sequence-based).",
     )

@@ -5,6 +5,8 @@ WORKDIR /app
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
     build-essential \
+    libgomp1 \
+    libgl1 \
     && rm -rf /var/lib/apt/lists/*
 
 # CPU-only
@@ -21,7 +23,7 @@ COPY serving/app /app/app
 ENV PYTHONPATH=/app/src
 
 # Create non-root user early so we can chown files
-RUN useradd -m myuser
+RUN useradd -m -u 1000 myuser
 
 # Ensure logs directory exists and is writable by the non-root user
 RUN mkdir -p /app/logs \
@@ -33,4 +35,4 @@ USER myuser
 EXPOSE 8000
 
 # Run
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

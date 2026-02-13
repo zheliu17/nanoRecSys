@@ -51,7 +51,7 @@ api_status = st.sidebar.empty()
 
 def check_api():
     try:
-        r = requests.get(f"{API_URL}/health", timeout=1)
+        r = requests.get(f"{API_URL}/health", timeout=1)  # type: ignore
         if r.status_code == 200:
             api_status.success("API Online 🟢")
         else:
@@ -176,7 +176,7 @@ if st.button("Generate Recommendations", type="primary", use_container_width=Tru
                 "explain": explain_mode,
                 "include_history": history_mode,
             }
-            response = requests.post(f"{API_URL}/recommend", json=payload, timeout=5)
+            response = requests.post(f"{API_URL}/recommend", json=payload, timeout=5)  # type: ignore
 
             if response.status_code != 200:
                 st.error(f"API Error: {response.text}")
@@ -200,19 +200,20 @@ if st.button("Generate Recommendations", type="primary", use_container_width=Tru
                 st.markdown(html_recs, unsafe_allow_html=True)
 
                 # --- User History (Horizontal) ---
-                if (
-                    history_mode
-                ):  # Remove "and history_ids" check to show message if empty
+                if history_mode:
                     st.divider()
-                    st.subheader(f"User History (Last {len(history_ids)} items)")
+                    st.subheader(
+                        f"User History (Newest first — Last {len(history_ids)} items)"
+                    )
 
                     if not history_ids:
                         st.info(
                             "No history found for this user (or history loading failed)."
                         )
                     else:
-                        # Render HTML
-                        html_hist = generate_movie_html_cards(history_ids)
+                        # Render HTML with newest items first (left-most)
+                        rev_history = list(reversed(history_ids))
+                        html_hist = generate_movie_html_cards(rev_history)
                         st.markdown(html_hist, unsafe_allow_html=True)
 
                 # --- Latency Stats ---

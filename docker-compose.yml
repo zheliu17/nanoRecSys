@@ -11,7 +11,7 @@ services:
     environment:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
-      - FAISS_INDEX_TYPE=ivf
+      - FAISS_INDEX_TYPE=flat
     depends_on:
       - redis
 

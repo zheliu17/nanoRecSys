@@ -169,7 +169,7 @@ def test_ranker_overfits_real_data():
 
     # Check predictions in Eval mode
     model.eval()
-    with torch.no_grad():
+    with torch.inference_mode():
         preds_eval = model.predict(
             b_user_emb, b_item_emb, b_genre_multihot, b_year_idx, b_popularity
         )
@@ -177,7 +177,7 @@ def test_ranker_overfits_real_data():
 
     # Check predictions in Train mode (to bypass BN running stats lag issues)
     model.train()
-    with torch.no_grad():
+    with torch.inference_mode():
         preds_train = model.predict(
             b_user_emb, b_item_emb, b_genre_multihot, b_year_idx, b_popularity
         )

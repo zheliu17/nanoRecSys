@@ -22,11 +22,11 @@ logger = logging.getLogger(__name__)
 
 
 class FaissStore:
-    def __init__(self, artifacts_dir: Path, index_type="ivf"):  # ivf or flat
+    def __init__(self, artifacts_dir: Path, index_type="flat"):  # ivf or flat
         self.artifacts_dir = artifacts_dir
         self.index = None
 
-        index_name = "faiss_ivfpq.index" if index_type == "ivf" else "faiss_flat.index"
+        index_name = "faiss_flat.index" if index_type == "flat" else "faiss_ivfpq.index"
         path = artifacts_dir / index_name
 
         if not path.exists():

@@ -152,6 +152,39 @@ def create_user_time_split(val_k: int = 5, test_k: int = 5):
 
 
 if __name__ == "__main__":
-    # Switching default to User-Based Split as requested
-    # create_global_time_split()
-    create_user_time_split(val_k=5, test_k=5)
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Create train/val/test splits.")
+    parser.add_argument(
+        "--val-k",
+        type=int,
+        default=1,
+        help="Number of per-user interactions for validation",
+    )
+    parser.add_argument(
+        "--test-k", type=int, default=1, help="Number of per-user interactions for test"
+    )
+    parser.add_argument(
+        "--split",
+        choices=["user", "global"],
+        default="user",
+        help="Split strategy to use (default: user)",
+    )
+    parser.add_argument(
+        "--val-ratio",
+        type=float,
+        default=0.1,
+        help="Validation ratio for global split (default: 0.1)",
+    )
+    parser.add_argument(
+        "--test-ratio",
+        type=float,
+        default=0.1,
+        help="Test ratio for global split (default: 0.1)",
+    )
+    args = parser.parse_args()
+
+    if args.split == "user":
+        create_user_time_split(val_k=args.val_k, test_k=args.test_k)
+    else:
+        create_global_time_split(val_ratio=args.val_ratio, test_ratio=args.test_ratio)

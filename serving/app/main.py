@@ -37,8 +37,24 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="NanoRecSys Serving", lifespan=lifespan)
 
 
-@app.post("/recommend", response_model=RecommendResponse)
+@app.post(
+    "/recommend",
+    response_model=RecommendResponse,
+    summary="Get movie recommendations",
+    description=(
+        "Return top-k movie recommendations for a user. "
+        "Set `explain=true` to include human-readable explanations, "
+        "and `include_history=true` to include the user's recent history in the response."
+    ),
+)
 async def recommend(request: RecommendRequest):
+    """Get recommendations for a user.
+
+    - `user_id`: numeric id of the user
+    - `k`: number of items to return
+    - `explain`: include explanations per item
+    - `include_history`: include user's history in the response
+    """
     if service is None:
         raise HTTPException(status_code=503, detail="Service not initialized")
 

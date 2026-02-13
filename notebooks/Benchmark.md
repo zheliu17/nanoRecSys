@@ -1,6 +1,6 @@
 ## ANN Ablation Results[^1]
 
-ANN Albations on MovieLens-20M Dataset (27k items):
+ANN Ablation on MovieLens-20M Dataset (27k items):
 ```bash
 python -m src.nanoRecSys.indexing.benchmark_ivfpq
 ```

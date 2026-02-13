@@ -30,7 +30,8 @@ dependencies = [
     "uvicorn",
     "wandb",
     "httpx",
-    "streamlit>=1.40.1",
+    "streamlit",
+    "seaborn",
 ]
 
 [project.optional-dependencies]

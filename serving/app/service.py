@@ -22,7 +22,7 @@ import torch
 
 from nanoRecSys.config import settings
 from nanoRecSys.models.ranker import MLPRanker
-from nanoRecSys.models.towers import UserTower
+from nanoRecSys.models.towers import ItemTower, TransformerUserTower, UserTower
 from nanoRecSys.utils.utils import compute_item_probabilities
 
 from .faiss_store import FaissStore
@@ -60,7 +60,7 @@ class RecommendationService:
         self.cache = RedisCache()
 
         # Initialize FAISS
-        index_type = os.getenv("FAISS_INDEX_TYPE", "ivf")
+        index_type = os.getenv("FAISS_INDEX_TYPE", "flat")
         self.faiss_store = FaissStore(settings.artifacts_dir, index_type=index_type)
 
         # Load Maps
@@ -78,12 +78,37 @@ class RecommendationService:
         n_items = len(self.item_map)
 
         # Load User Tower
-        logger.info("Loading User Tower...")
-        self.user_tower = UserTower(
-            vocab_size=n_users,
-            embed_dim=settings.embed_dim,
-            output_dim=settings.tower_out_dim,
-        )
+        logger.info(f"Loading User Tower ({settings.user_tower_type})...")
+        if settings.user_tower_type == "transformer":
+            # Transformer User Tower uses sequences of items
+
+            dummy_item_tower = ItemTower(
+                vocab_size=n_items,
+                embed_dim=settings.embed_dim,
+                output_dim=settings.tower_out_dim,
+                hidden_dims=settings.towers_hidden_dims,
+                use_projection=settings.use_projection,
+            )
+
+            self.user_tower = TransformerUserTower(
+                vocab_size=n_items,
+                embed_dim=settings.tower_out_dim,
+                output_dim=settings.tower_out_dim,
+                max_seq_len=settings.max_seq_len,
+                n_heads=settings.transformer_heads,
+                n_layers=settings.transformer_layers,
+                dropout=settings.transformer_dropout,
+                swiglu_hidden_dim=settings.swiglu_hidden_dim,
+                shared_embedding=dummy_item_tower,
+            )
+        else:
+            # MLP User Tower uses user ID
+            self.user_tower = UserTower(
+                vocab_size=n_users,
+                embed_dim=settings.embed_dim,
+                output_dim=settings.tower_out_dim,
+            )
+
         user_tower_path = settings.artifacts_dir / "user_tower.pth"
         if user_tower_path.exists():
             self.user_tower.load_state_dict(
@@ -92,7 +117,10 @@ class RecommendationService:
                 )
             )
         else:
-            logger.warning("User Tower checkpoint not found.")
+            logger.error("User Tower checkpoint not found.")
+            raise ValueError(
+                "User Tower checkpoint is required for the service to function."
+            )
         self.user_tower.to(self.device)
         self.user_tower.eval()
 
@@ -121,8 +149,11 @@ class RecommendationService:
         logger.info("Loading Ranker...")
         self.ranker_model = MLPRanker(
             input_dim=settings.tower_out_dim,
+            hidden_dims=settings.ranker_hidden_dims,
             num_genres=num_genres,
             num_years=num_years,
+            genre_dim=16,
+            year_dim=8,
         )
         ranker_path = settings.artifacts_dir / "ranker_model.pth"
         if ranker_path.exists():
@@ -142,9 +173,9 @@ class RecommendationService:
                 item_emb_path, map_location=self.device, weights_only=False
             )
         else:
-            logger.warning("Ranker item embeddings not found. Using random.")
-            self.ranker_item_embeddings = torch.randn(
-                n_items, settings.tower_out_dim, device=self.device
+            logger.warning("Ranker item embeddings not found.")
+            raise ValueError(
+                "Ranker item embeddings are required for the service to function."
             )
 
         pop_stats_path = settings.artifacts_dir / "ranker_pop_stats.pt"
@@ -218,16 +249,29 @@ class RecommendationService:
                 try:
                     import pickle
 
-                    # Load only necessary columns to save memory
-                    df = pd.read_parquet(history_path, columns=["user_idx", "item_idx"])
+                    # Load train and val for complete history
+                    dfs = []
+                    # Load user_idx, item_idx, and timestamp
+                    columns = ["user_idx", "item_idx", "timestamp"]
+                    df_train = pd.read_parquet(history_path, columns=columns)
+                    dfs.append(df_train)
+
+                    val_path = settings.processed_data_dir / "val.parquet"
+                    if val_path.exists():
+                        df_val = pd.read_parquet(val_path, columns=columns)
+                        dfs.append(df_val)
+
+                    full_df = pd.concat(dfs, ignore_index=True)
+                    full_df = full_df.sort_values(by=["user_idx", "timestamp"])
+
                     self.user_history = (
-                        df.groupby("user_idx")["item_idx"].apply(list).to_dict()
+                        full_df.groupby("user_idx")["item_idx"].apply(list).to_dict()
                     )
                     # Save for future use
                     with open(history_cache_path, "wb") as f:
                         pickle.dump(self.user_history, f)
                     logger.info(
-                        f"Loaded and cached history for {len(self.user_history)} users."
+                        f"Loaded and cached history for {len(self.user_history)} users (train+val)."
                     )
                 except Exception as e:
                     logger.error(f"Error loading history: {e}")
@@ -281,11 +325,37 @@ class RecommendationService:
             }
 
         u_idx = self.user_id_to_idx[user_id]
-        u_tensor = torch.tensor([u_idx], device=self.device)
 
         # 3. Retrieve Candidates (User Tower + FAISS)
-        with torch.no_grad():
-            user_emb = self.user_tower(u_tensor)  # (1, 128)
+        with torch.inference_mode():
+            if settings.user_tower_type == "transformer":
+                # Get user history
+                history = self.user_history.get(u_idx, [])
+                if not history:
+                    # Cold user (known ID but no history) - Fallback
+                    limit = min(k, len(self.fallback_movie_ids))
+                    return {
+                        "movie_ids": self.fallback_movie_ids[:limit],
+                        "scores": self.fallback_scores[:limit],
+                        "explanations": ["Popularity fallback (No History)"] * limit
+                        if explain
+                        else None,
+                    }
+
+                # Truncate to max_seq_len
+                seq = history[-settings.max_seq_len :]
+                seq = [item + 1 for item in seq]  # Shift by 1 for padding idx=0
+                pad_len = settings.max_seq_len - len(seq)
+                if pad_len > 0:
+                    seq = [0] * pad_len + seq
+                # Transformer expects (B, SeqLen)
+                seq_tensor = torch.tensor([seq], dtype=torch.long, device=self.device)
+
+                # Use .encode() for transformer tower
+                user_emb = self.user_tower.encode(seq_tensor)  # (1, emb_dim)
+            else:
+                u_tensor = torch.tensor([u_idx], device=self.device)
+                user_emb = self.user_tower(u_tensor)  # (1, emb_dim)
 
         timings["embedding"] = (time.time() - t_emb_start) * 1000
 
@@ -310,7 +380,7 @@ class RecommendationService:
 
         # 4. Re-Rank
         t_rank_start = time.time()
-        with torch.no_grad():
+        with torch.inference_mode():
             # Prepare Ranker Inputs
             # User emb expanded
             user_emb_expanded = user_emb.repeat(len(candidate_indices), 1)

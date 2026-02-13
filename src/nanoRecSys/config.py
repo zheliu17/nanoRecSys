@@ -60,11 +60,12 @@ class Settings(BaseSettings):
     # For disable training only, see `explicit_neg_weight` in the training config below.
     ranker_negative_threshold: Union[float, None] = None
 
-    # --- Model parameters ---
+    # --- MLP tower parameters ---
     embed_dim: int = 256
     tower_out_dim: int = 256
     towers_hidden_dims: list[int] = []  # Hidden dims for MLP towers
     use_projection: bool = False  # Add final projection layer to towers
+    user_tower_type: str = "transformer"  # "mlp" or "transformer"
 
     # --- Transformer tower settings ---
     max_seq_len: int = 200

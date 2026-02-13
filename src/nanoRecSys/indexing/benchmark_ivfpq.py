@@ -22,9 +22,9 @@ from nanoRecSys.config import settings
 from nanoRecSys.eval.metrics import recall_at_k
 
 # Constants for ablation
-N_LISTS = [64, 128, 256, 512]
-N_PROBES = [1, 4, 8, 16, 32]
-MS = [8, 16]
+N_LISTS = [256, 512, 1024]
+N_PROBES = [1, 4, 8, 16, 32, 64, 128]
+MS = [32, 64]
 
 
 def load_test_data():
@@ -65,6 +65,11 @@ def run_ablation():
 
     d = item_embs.shape[1]
 
+    user_embs = user_embs.astype("float32", copy=False)
+    item_embs = item_embs.astype("float32", copy=False)
+    faiss.normalize_L2(user_embs)
+    faiss.normalize_L2(item_embs)
+
     test_users = list(ground_truth.keys())
     # Filter test_users that have embeddings
     test_users = [u for u in test_users if u < len(user_embs)]
@@ -76,8 +81,8 @@ def run_ablation():
     results = []
 
     # 1. Baseline: Flat Index
-    print("\n--- Running Baseline: Flat Index ---")
-    index_flat = faiss.IndexFlatIP(d)
+    print("\n--- Running Baseline: Flat Index (L2) ---")
+    index_flat = faiss.IndexFlatL2(d)
     index_flat.add(item_embs)  # type: ignore
 
     # We use a sample of users for benchmarking
@@ -122,9 +127,7 @@ def run_ablation():
             print(f"Building Index: IVF{nlist}, PQ{m}")
             try:
                 # Build Index
-                index = faiss.index_factory(
-                    d, f"IVF{nlist},PQ{m}", faiss.METRIC_INNER_PRODUCT
-                )
+                index = faiss.index_factory(d, f"IVF{nlist},PQ{m}", faiss.METRIC_L2)
                 index.train(item_embs)
                 index.add(item_embs)
 

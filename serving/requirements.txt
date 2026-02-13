@@ -1,10 +1,10 @@
-fastapi
-uvicorn
+fastapi>=0.110.0
+uvicorn>=0.30.0
 redis
 faiss-cpu
-torch
 numpy
 pandas
 pyarrow
 pydantic
 pydantic-settings
+# torch is installed separately in the Dockerfile

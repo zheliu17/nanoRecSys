@@ -14,19 +14,35 @@
 
 from typing import List, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class RecommendRequest(BaseModel):
-    user_id: int
-    k: int = 10
-    explain: bool = False
-    include_history: bool = False
+    user_id: int = Field(
+        ..., description="ID of the user to get recommendations for", example=123
+    )  # type: ignore
+    k: int = Field(10, description="Number of recommendations to return", example=10)  # type: ignore
+    explain: bool = Field(
+        False, description="Whether to include explanations for each recommendation"
+    )
+    include_history: bool = Field(
+        False,
+        description="Whether to include the user's interaction history in the response",
+    )
 
 
 class RecommendResponse(BaseModel):
-    movie_ids: List[int]
-    scores: List[float]
-    explanations: Optional[List[str]] = None
-    debug_timing: Optional[dict] = None
-    history: Optional[List[int]] = None
+    movie_ids: List[int] = Field(..., description="List of recommended movie IDs")
+    scores: List[float] = Field(
+        ..., description="Corresponding relevance scores for each recommended item"
+    )
+    explanations: Optional[List[str]] = Field(
+        None, description="Optional human-readable explanations for recommendations"
+    )
+    debug_timing: Optional[dict] = Field(
+        None, description="Optional debug timing information (for development)"
+    )
+    history: Optional[List[int]] = Field(
+        None,
+        description="Optional user history included when `include_history` is true",
+    )

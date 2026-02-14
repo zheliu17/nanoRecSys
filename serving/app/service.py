@@ -364,6 +364,12 @@ class RecommendationService:
         candidate_indices, _ = self.faiss_store.search(user_emb, k=RETRIEVAL_K)
         timings["retrieval"] = (time.time() - t_ret_start) * 1000
 
+        history_items = self.user_history.get(u_idx, [])
+        if history_items:
+            watched = set(history_items)
+            filtered = [int(ci) for ci in candidate_indices if int(ci) not in watched]
+            candidate_indices = filtered
+
         if len(candidate_indices) == 0:
             limit = min(k, len(self.fallback_movie_ids))
             return {

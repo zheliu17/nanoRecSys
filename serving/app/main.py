@@ -47,7 +47,7 @@ app = FastAPI(title="NanoRecSys Serving", lifespan=lifespan)
         "and `include_history=true` to include the user's recent history in the response."
     ),
 )
-async def recommend(request: RecommendRequest):
+def recommend(request: RecommendRequest):
     """Get recommendations for a user.
 
     - `user_id`: numeric id of the user

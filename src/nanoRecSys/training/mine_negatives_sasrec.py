@@ -378,5 +378,8 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     run_pipeline(
-        batch_size=args.batch_size, top_k=args.top_k, sampling_ratio=args.sampling_ratio
+        batch_size=args.batch_size,
+        top_k=args.top_k,
+        skip_top=args.skip_top,
+        sampling_ratio=args.sampling_ratio,
     )

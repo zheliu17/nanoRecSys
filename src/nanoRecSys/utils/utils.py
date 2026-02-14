@@ -51,20 +51,23 @@ def get_linear_warmup_scheduler(optimizer, warmup_steps):
     return LambdaLR(optimizer, lr_lambda)
 
 
-def load_all_positives(threshold: float | None = None) -> dict:
+def load_all_positives(
+    threshold: float | None = None, splits: list[str] | None = None
+) -> dict:
     """
-    Load all positive interactions for each user across train, val, and test splits.
+    Load all positive interactions for each user across specified splits.
     Returns:
         dict: user_idx -> set of positive item_idxs
     """
     logger = get_logger()
     threshold = threshold if threshold is not None else 0
-    logger.info("Loading all interactions to build global positive sets...")
-    if threshold > 0:
-        logger.info(f"Filtering with rating >= {threshold}...")
+    splits = splits or ["train", "val", "test"]
+
+    logger.info(
+        f"Loading interactions from {splits} to build positive sets (threshold={threshold})..."
+    )
 
     dfs = []
-    splits = ["train", "val", "test"]
 
     for split in splits:
         path = settings.processed_data_dir / f"{split}.parquet"

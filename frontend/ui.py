@@ -156,7 +156,7 @@ with col1:
         help="New user IDs can be any integer; existing users are in the range 1-138493.",
     )
 with col2:
-    top_k = st.slider("Top K", 1, 50, 10)
+    top_k = st.slider("Top K", 1, 30, 10)
 with col3:
     # explain_mode = st.toggle("Generate Explanations", value=False)
     # TODO: Replace with toggle when available

@@ -49,6 +49,7 @@ def generate_embeddings(
 
             batch_emb = tower(batch_ids)
             all_embeddings[i:batch_end] = batch_emb.cpu().numpy()
+    tqdm.write("")
 
     embeddings = all_embeddings
 
@@ -176,7 +177,7 @@ def build_user_embeddings(
     batch_size: int = 512,
     device=None,
     model=None,
-    user_tower_type: str = "mlp",
+    user_tower_type: str = "transformer",
 ):
     """
     Generate embeddings for all users using the trained UserTower model.

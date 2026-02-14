@@ -76,7 +76,7 @@ class Settings(BaseSettings):
 
     transformer_heads: int = 8
     transformer_layers: int = 4
-    transformer_dropout: float = 0.2
+    transformer_dropout: float = 0.1
     positional_embedding_type: str = "rope"  # "rope" or "absolute"
     rope_base: int = 500
     # None to use default, rounded 8/3* embed_dim
@@ -89,31 +89,31 @@ class Settings(BaseSettings):
     learnable_temperature: bool = False  # Make temperature a trainable parameter
     # Negative sampling strategy during training: "in-batch" or "sampled".
     # Note: logQ correction is not applied when using "sampled".
-    negative_sampling_strategy: str = "sampled"  # "in-batch" or "sampled"
+    negative_sampling_strategy: str = "in-batch"  # "in-batch" or "sampled"
     retrieval_in_batch_loss_type: str = "info_nce"  # "info_nce" or "dcl"
     num_negatives: int = 3000  # Used only when negative_sampling_strategy == "sampled"
     id_dropout: float = 0.1  # Probability of ID-modality dropout
 
     # --- Training ---
     # Defaults are not optimally tuned
-    epochs: int = 1
-    batch_size: int = 256
+    epochs: int = 300
+    batch_size: int = 128
     learning_rate: float = 1e-3
     max_steps: int = -1  # -1 disables a global step cap
     limit_train_batches: Union[float, int] = 1.0
     num_workers: int = 0
     pin_memory: bool = True
-    check_val_every_n_epoch: int = 1
+    check_val_every_n_epoch: int = 3
 
     # --- Optimizer (AdamW) ---
-    weight_decay: float = 1e-2
+    weight_decay: float = 0
     adam_beta1: float = 0.9
-    adam_beta2: float = 0.999
+    adam_beta2: float = 0.98  # Transformer
     adam_eps: float = 1e-8
 
     # --- Scheduler ---
     use_scheduler: bool = True  # Enable/disable scheduler
-    warmup_steps: int = 500  # Number of warmup steps for linear warmup
+    warmup_steps: int = 2000  # Number of warmup steps for linear warmup
 
     # --- Negative mining ---
     mining_top_k: int = 100  # Number of top items to retrieve per user

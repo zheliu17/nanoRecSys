@@ -38,6 +38,7 @@ class OfflineEvaluator:
         k_list=[10, 20, 50, 100],
         sampled=False,
         sample_strategy="uniform",
+        remove_history=True,
     ):
         logger = get_logger()
         self.batch_size = batch_size
@@ -45,6 +46,7 @@ class OfflineEvaluator:
         self.max_k = max(k_list)
         self.sampled = sampled
         self.sample_strategy = sample_strategy
+        self.remove_history = remove_history
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         logger.info(f"Using device: {self.device}")
 
@@ -55,6 +57,15 @@ class OfflineEvaluator:
         self.logger = logger
 
         self.test_users, self.test_targets = self._load_test_data()
+
+        # Load history for filtering if needed
+        self.user_history = None
+        if self.remove_history and not self.sampled:
+            logger.info("Loading user history (train + val) for filtering...")
+            self.user_history = load_all_positives(
+                threshold=settings.evaluation_positive_threshold,
+                splits=["train", "val"],
+            )
 
         if self.sampled:
             # Check constraints
@@ -242,9 +253,6 @@ class OfflineEvaluator:
         logger.info("Loading embeddings from disk...")
         self._load_user_embeddings()
         self._load_item_embeddings()
-        logger.info(
-            f"Loaded Users: {self.user_embs.shape}, Items: {self.item_embs.shape}"  # type: ignore
-        )
 
     def _load_ranker(self):
         """Load Ranker model and Metadata."""
@@ -353,6 +361,37 @@ class OfflineEvaluator:
 
             return {k: v / len(self.test_users) for k, v in metrics_sum.items()}
 
+        # Full (Non-Sampled) Evaluation
+        if self.remove_history and self.user_history is not None:
+            self.logger.info("Running Popularity with History Masking...")
+            pop_vector = np.zeros(self.n_items, dtype=float)
+            if not pop_counts.empty:
+                pop_vector[pop_counts.index] = pop_counts.values
+            pop_tensor = torch.from_numpy(pop_vector).float().to(self.device)
+
+            metrics_sum = {}
+            for i in tqdm(range(0, len(self.test_users), self.batch_size)):
+                idx_end = i + self.batch_size
+                batch_targets = self.test_targets[i:idx_end]
+                batch_u_idx = self.test_users[i:idx_end]
+
+                # Scores: (N,) -> (B, N)
+                batch_scores = (
+                    pop_tensor.unsqueeze(0).expand(len(batch_u_idx), -1).clone()
+                )
+
+                # Mask History
+                batch_scores = self._mask_history(batch_scores, batch_u_idx)
+
+                # Top K
+                _, topk = torch.topk(batch_scores, k=self.max_k, dim=1)
+                batch_preds = topk.cpu().numpy()
+
+                res = self._batch_metrics(batch_preds, batch_targets)
+                self._accumulate_metrics(metrics_sum, res)
+
+            return {k: v / len(self.test_users) for k, v in metrics_sum.items()}
+
         global_top_k = pop_counts.index.values[: self.max_k]
 
         metrics_sum = {}
@@ -365,6 +404,23 @@ class OfflineEvaluator:
 
         return {k: v / len(self.test_users) for k, v in metrics_sum.items()}
 
+    def _mask_history(self, scores, batch_u_idx):
+        """Mask items in user history with -infinity."""
+        if self.user_history is None or batch_u_idx is None:
+            return scores
+
+        rows, cols = [], []
+        for i, u_id in enumerate(batch_u_idx):
+            hist = self.user_history.get(u_id, set())
+            if hist:
+                rows.extend([i] * len(hist))
+                cols.extend(list(hist))
+
+        if rows:
+            scores[rows, cols] = -float("inf")
+
+        return scores
+
     def _compute_and_accumulate(
         self,
         batch_u_emb,
@@ -372,6 +428,7 @@ class OfflineEvaluator:
         metrics_sum,
         candidates=None,
         log_p=None,
+        batch_u_idx=None,
     ):
         """
         Compute scores and metrics for a batch of users.
@@ -405,6 +462,9 @@ class OfflineEvaluator:
             # Full Retrieval Scoring
             scores = torch.matmul(batch_u_emb, self.item_embs.T)  # type: ignore
 
+            # Mask history
+            scores = self._mask_history(scores, batch_u_idx)
+
             # 1. Standard
             _, topk_std = torch.topk(scores, k=self.max_k, dim=1)
             preds_std = topk_std.cpu().numpy()
@@ -414,6 +474,15 @@ class OfflineEvaluator:
             # 2. LogQ
             if log_p is not None:
                 scores_logq = (scores / settings.temperature) + log_p
+                # Note: mask again or apply mask to logq scores?
+                # Usually masking sets to -inf.
+                # If scores was masked, scores/temp is -inf. + log_p is still -inf unless log_p is inf.
+                # Just to be safe, apply mask again or reuse masked scores logic.
+                # scores_logq relies on unmodifed logic usually?
+                # Wait, if I modified `scores` in place, it affects scores_logq computation.
+                # yes, scores[rows,cols] = -inf.
+                # scores_logq = (-inf / temp) + log_p = -inf.
+                # So masking works.
                 _, topk_logq = torch.topk(scores_logq, k=self.max_k, dim=1)
                 preds_logq = topk_logq.cpu().numpy()
                 res_logq = self._batch_metrics(preds_logq, batch_targets)
@@ -452,6 +521,7 @@ class OfflineEvaluator:
                 metrics_sum,
                 candidates=batch_candidates,
                 log_p=log_p,
+                batch_u_idx=batch_u_idx,
             )
 
         return {k: v / len(self.test_users) for k, v in metrics_sum.items()}
@@ -538,62 +608,6 @@ class OfflineEvaluator:
 
         return metrics_sum
 
-    def eval_ranker(self, new_items=False):
-        """
-        Evaluate Ranker (Re-rank Top-100 from Retrieval).
-
-        Args:
-            new_items: if True, treat all candidates as new items
-        """
-        self._load_embeddings()
-        self._load_ranker()
-
-        retrieve_k = 100  # Candidates to retrieve
-        assert retrieve_k >= self.max_k, "Retrieval K must be >= Evaluation K"
-
-        metrics_sum = {}
-        prefix = "RankerNew_" if new_items else "Ranker_"
-        label = "New Items" if new_items else ""
-
-        self.logger.info(f"Scoring users (Retrieval + Ranker {label})...")
-        for i in tqdm(range(0, len(self.test_users), self.batch_size)):
-            idx_end = i + self.batch_size
-            batch_u_idx = self.test_users[i:idx_end]
-            batch_targets = self.test_targets[i:idx_end]
-            batch_u_emb = self.user_embs[batch_u_idx]  # type: ignore
-
-            if self.sampled:
-                candidates = self.test_candidates[i:idx_end]
-            else:
-                # --- A. Retrieval ---
-                scores = torch.matmul(batch_u_emb, self.item_embs.T)  # type: ignore
-                scores = scores / settings.temperature  # No logQ corrections
-
-                # Get Top-100 Candidates
-                _, candidates = torch.topk(scores, k=retrieve_k, dim=1)  # (B, 100)
-
-                # A1. Record Retrieval Metrics (for comparison)
-                preds_retrieval = candidates[:, : self.max_k].cpu().numpy()
-                res_retrieval = self._batch_metrics(preds_retrieval, batch_targets)
-                self._accumulate_metrics(
-                    metrics_sum, res_retrieval, prefix="Retrieval_"
-                )
-
-            # --- B. Ranker Re-Ranking ---
-            new_item_mask = None
-            if new_items:
-                # Mask all items as new
-                flat_size = candidates.view(-1).shape[0]
-                new_item_mask = torch.ones((flat_size, 1), device=self.device)
-
-            batch_metrics = self._score_candidates_with_ranker(
-                candidates, batch_u_emb, batch_targets, new_item_mask, prefix
-            )
-            for k, v in batch_metrics.items():
-                metrics_sum[k] = metrics_sum.get(k, 0.0) + v
-
-        return {k: v / len(self.test_users) for k, v in metrics_sum.items()}
-
     def _load_transformer_user_tower(self):
         logger = get_logger()
         logger.info("Loading Transformer User Tower...")
@@ -670,11 +684,13 @@ class OfflineEvaluator:
 
         self.test_targets = [[t] for t in targets_0based]
 
+        # Load user IDs for sequences (needed for history masking or sampling)
+        user_path = settings.processed_data_dir / "seq_test_user_ids.npy"
+        if user_path.exists():
+            self.test_users = np.load(user_path)
+
         # Prepare Sampled Candidates if needed
         if self.sampled:
-            user_path = settings.processed_data_dir / "seq_test_user_ids.npy"
-            test_user_ids = np.load(user_path)
-            self.test_users = test_user_ids
             self._prepare_sampled_candidates()
 
         log_p = None
@@ -706,15 +722,78 @@ class OfflineEvaluator:
             if self.sampled:
                 batch_candidates = self.test_candidates[i : i + self.batch_size]
 
+            # Get user IDs for history masking
+            batch_u_idx = None
+            if getattr(self, "test_users", None) is not None:
+                batch_u_idx = self.test_users[i : i + self.batch_size]
+
             self._compute_and_accumulate(
                 batch_u_emb,
                 batch_targets_0based,
                 metrics_sum,
                 candidates=batch_candidates,
                 log_p=log_p,
+                batch_u_idx=batch_u_idx,
             )
 
         return {k: v / dataset_size for k, v in metrics_sum.items()}
+
+    def eval_ranker(self, new_items=False):
+        """
+        Evaluate Ranker (Re-rank Top-100 from Retrieval).
+
+        Args:
+            new_items: if True, treat all candidates as new items
+        """
+        self._load_embeddings()
+        self._load_ranker()
+
+        retrieve_k = 100  # Candidates to retrieve
+        assert retrieve_k >= self.max_k, "Retrieval K must be >= Evaluation K"
+
+        metrics_sum = {}
+        prefix = "RankerNew_" if new_items else "Ranker_"
+        label = "New Items" if new_items else ""
+
+        self.logger.info(f"Scoring users (Retrieval + Ranker {label})...")
+        for i in tqdm(range(0, len(self.test_users), self.batch_size)):
+            idx_end = i + self.batch_size
+            batch_u_idx = self.test_users[i:idx_end]
+            batch_targets = self.test_targets[i:idx_end]
+            batch_u_emb = self.user_embs[batch_u_idx]  # type: ignore
+
+            if self.sampled:
+                candidates = self.test_candidates[i:idx_end]
+            else:
+                # --- A. Retrieval ---
+                scores = torch.matmul(batch_u_emb, self.item_embs.T)  # type: ignore
+                scores = self._mask_history(scores, batch_u_idx)
+                scores = scores / settings.temperature  # No logQ corrections
+
+                # Get Top-100 Candidates
+                _, candidates = torch.topk(scores, k=retrieve_k, dim=1)  # (B, 100)
+
+                # A1. Record Retrieval Metrics (for comparison)
+                preds_retrieval = candidates[:, : self.max_k].cpu().numpy()
+                res_retrieval = self._batch_metrics(preds_retrieval, batch_targets)
+                self._accumulate_metrics(
+                    metrics_sum, res_retrieval, prefix="Retrieval_"
+                )
+
+            # --- B. Ranker Re-Ranking ---
+            new_item_mask = None
+            if new_items:
+                # Mask all items as new
+                flat_size = candidates.view(-1).shape[0]
+                new_item_mask = torch.ones((flat_size, 1), device=self.device)
+
+            batch_metrics = self._score_candidates_with_ranker(
+                candidates, batch_u_emb, batch_targets, new_item_mask, prefix
+            )
+            for k, v in batch_metrics.items():
+                metrics_sum[k] = metrics_sum.get(k, 0.0) + v
+
+        return {k: v / len(self.test_users) for k, v in metrics_sum.items()}
 
     def eval_ranker_new_items(self):
         """Evaluate Ranker on simulated new items (all candidates treated as unknown)."""
@@ -745,6 +824,7 @@ class OfflineEvaluator:
             else:
                 # Retrieval
                 scores = torch.matmul(batch_u_emb, self.item_embs.T)  # type: ignore
+                scores = self._mask_history(scores, batch_u_idx)
                 scores = scores / settings.temperature
                 _, candidates = torch.topk(scores, k=retrieve_k, dim=1)
 
@@ -824,12 +904,21 @@ if __name__ == "__main__":
         choices=["uniform", "popularity", "mixed"],
         help="Strategy for sampling negatives in sampled evaluation.",
     )
+    parser.add_argument(
+        "--include_history",
+        action="store_false",
+        dest="remove_history",
+        help="Include user history in candidates (disable history removal). Default: Remove history.",
+    )
+    parser.set_defaults(remove_history=True)
+
     args = parser.parse_args()
 
     evaluator = OfflineEvaluator(
         batch_size=args.batch_size,
         sampled=args.sampled,
         sample_strategy=args.sample_strategy,
+        remove_history=args.remove_history,
     )
 
     results = {}

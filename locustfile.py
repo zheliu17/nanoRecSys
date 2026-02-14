@@ -20,11 +20,16 @@ class RecSysUser(HttpUser):
 
     @task
     def get_recommendations(self):
-        # 1. Random user ID around the range of known users (e.g. 1-138000)
-        # Using a smaller range ensures some cache hits if Redis is on
         import random
 
-        user_id = random.randint(1, 1000)
+        # Simulate 70% "Hot" users (Cache Hits) and 30% "Cold" users (Cache Misses)
+        if random.random() < 0.7:
+            # Hot users: Reuse a small set of IDs (e.g., 1-1000)
+            user_id = random.randint(1, 1000)
+        else:
+            # Cold users: Pick from the rest of your 128k dataset (e.g., 1001-128000)
+            # This forces the system to run Embedding + Retrieval + Ranking
+            user_id = random.randint(1001, 128000)
 
         payload = {
             "user_id": user_id,

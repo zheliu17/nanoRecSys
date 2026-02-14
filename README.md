@@ -19,7 +19,7 @@
 
 *See [Training.md](./notebooks/Training.md) for architectural deep-dives and [Benchmark.md](./notebooks/Benchmark.md) for latency analysis.*
 
-### Offline Performance
+#### Offline Performance
 
 Compared against recent literature (ICML'24, WWW'25), our retrieval model performs competitively:
 
@@ -27,7 +27,7 @@ Compared against recent literature (ICML'24, WWW'25), our retrieval model perfor
 | :--- | :--- | :--- | :--- |
 | **HR@10** | **0.286** | ~0.20 - 0.29 | ~0.33 |
 
-### Online Latency
+#### Online Latency
 
 Load tested with `locust` on a CPU-only laptop setup:
 
@@ -36,27 +36,6 @@ Load tested with `locust` on a CPU-only laptop setup:
 
 ## Quick Start
 
-You have three options to get started:
-
-1. **Train from scratch (~10 hrs):** Train the high-performance Sequential Transformer.
-2. **Download Pre-trained:** Skip training and use our hosted artifacts.
-3. **Train Baseline (<5 mins):** Train a simple Matrix Factorization model for quick testing.
-
-> **Fast Track:** We provide a `Makefile` to simplify common tasks.
->
-> ```bash
-> # export WANDB_MODE=offline
-> make install        # (Equivalent to pip install -e .)
->
-> # Option 1: Train from scratch
-> make train-retriever
->
-> # Option 3: Train simple baseline
-> make train-retriever-mlp
->
-> make serve          # (Equivalent to docker-compose up --build)
-> ```
-
 ### 1. Installation
 
 ```bash
@@ -64,28 +43,48 @@ git clone https://github.com/zheliu17/nanoRecSys.git
 cd nanoRecSys
 
 # Install dependencies (Virtual Environment recommended)
-pip install -e .
+# Default installation includes training components only. Use [all] for serving dependencies.
+make install  # (Equivalent to pip install -e .[all])
 ```
 
 ### 2. Training & Artifact Generation
 
-See [Training.md](./notebooks/Training.md) for detailed steps. You need to run the [Sequential Transformer Notebook](./notebooks/sequential_transformer.ipynb) (or use `make train-retriever`) to generate the necessary model artifacts (`*.pth`, `*.npy`, `*.index`) in the `artifacts/` folder.
-
-### 3. Serving
-
-Once artifacts are generated, launch the full stack (API, Cache, Frontend):
+To prepare data:
 
 ```bash
-# python -m nanoRecSys.indexing.build_faiss_ivfpq --nlist 64 --m 16
-docker-compose up --build
+make data
 ```
 
-### 4. Testing (Optional)
+Three options for retriever training and artifact generation:
 
-Run unit and integration tests:
+* **Train from scratch (~10 hrs):** Train the high-performance Sequential Transformer.
+
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/zheliu17/nanoRecSys/blob/main/notebooks/sequential_transformer.ipynb)
+[Sequential Transformer Notebook](./notebooks/sequential_transformer.ipynb)
 
 ```bash
-pytest tests/
+# export WANDB_MODE=offline
+make train-retriever
+```
+
+* **Download Pre-trained:** Skip training and use our hosted artifacts.
+
+```bash
+git clone https://huggingface.co/zheliu97/nanoRecSys artifacts
+```
+
+* **Train Baseline (~5 mins):** Train a simple Matrix Factorization model for quick testing.
+
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/zheliu17/nanoRecSys/blob/main/notebooks/static_baseline_embeddings.ipynb)
+[Baseline Training Notebook](./notebooks/static_baseline_embeddings.ipynb)
+
+### 3. Ranker Training, Indexing, and Serving
+
+Also see [Sequential Transformer Notebook](./notebooks/sequential_transformer.ipynb)
+
+```bash
+make post-train
+make serve # (Equivalent to docker-compose up --build)
 ```
 
 ## System Architecture

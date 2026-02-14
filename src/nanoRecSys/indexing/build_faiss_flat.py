@@ -19,10 +19,12 @@ import faiss
 import numpy as np
 
 from nanoRecSys.config import settings
+from nanoRecSys.utils.logging_config import get_logger
 
 
 def build_flat_index(embeddings_path=None, output_path=None):
-    print("Alignment check: Loading item embeddings for Flat Index...")
+    logger = get_logger()
+    logger.info("Alignment check: Loading item embeddings for Flat Index...")
     if embeddings_path is None:
         embeddings_path = settings.artifacts_dir / "item_embeddings.npy"
     else:
@@ -34,23 +36,23 @@ def build_flat_index(embeddings_path=None, output_path=None):
         output_path = Path(output_path)
 
     if not embeddings_path.exists():
-        print(f"Error: Embeddings not found at {embeddings_path}")
+        logger.error(f"Embeddings not found at {embeddings_path}")
         return
 
     embeddings = np.load(embeddings_path).astype("float32")
     faiss.normalize_L2(embeddings)
 
     d = embeddings.shape[1]
-    print(f"Loaded {len(embeddings)} embeddings of dimension {d}")
+    logger.info(f"Loaded {len(embeddings)} embeddings of dimension {d}")
 
     index = faiss.IndexFlatIP(d)
     index.add(embeddings)  # type: ignore
 
-    print(f"Added {index.ntotal} vectors to index.")
+    logger.info(f"Added {index.ntotal} vectors to index.")
 
-    print(f"Saving index to {output_path}")
+    logger.info(f"Saving index to {output_path}")
     faiss.write_index(index, str(output_path))
-    print("Flat index built successfully.")
+    logger.info("Flat index built successfully.")
 
 
 if __name__ == "__main__":

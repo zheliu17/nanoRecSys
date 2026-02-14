@@ -42,7 +42,7 @@ help:
 
 # Installation
 install:
-	$(PIP) install -e .
+	$(PIP) install -e .[all]
 
 # Data Processing
 data:
@@ -70,7 +70,7 @@ build-index:
 	$(PYTHON) -m nanoRecSys.indexing.build_faiss_flat
 
 post-train:
-	$(PYTHON) -m nanoRecSys.indexing.build_embeddings
+	$(PYTHON) -m nanoRecSys.indexing.build_embeddings --mode all
 	$(PYTHON) -m nanoRecSys.indexing.build_faiss_flat
 	$(PYTHON) -m $(MINING_ARGS)
 	$(PYTHON) -m nanoRecSys.train $(RANKER_ARGS) $(ARGS)

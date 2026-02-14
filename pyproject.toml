@@ -1,44 +1,39 @@
 [project]
 name = "nanoRecSys"
 version = "0.1.0"
-authors = [
-    {name = "Zhe Liu"}
-]
+authors = [{ name = "Zhe Liu" }]
 description = "A nano recommendation system project"
 readme = "README.md"
-license = {text = "Apache-2.0"}
+license = { text = "Apache-2.0" }
 requires-python = ">=3.8"
 dependencies = [
-    "fastapi",
-    "faiss-cpu",
-    "ipykernel",
-    "matplotlib",
     "mypy",
-    "nbstripout",
     "numpy",
     "pandas",
     "pyarrow",
     "pydantic-settings >=2.0.0",
     "pytest",
     "pytorch-lightning",
-    "redis",
     "requests",
     "ruff",
     "torch",
     "torchmetrics",
     "tqdm",
-    "uvicorn",
     "wandb",
-    "httpx",
-    "streamlit",
-    "seaborn",
 ]
 
 [project.optional-dependencies]
-dev = [
-    "nbstripout",
+all = [
+    "fastapi",
+    "faiss-cpu",
+    "httpx",
+    "ipykernel",
     "locust",
+    "matplotlib",
+    "nbstripout",
+    "redis",
     "streamlit",
+    "uvicorn",
 ]
 
 [build-system]

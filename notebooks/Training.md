@@ -2,7 +2,7 @@
 
 ## Retriever: Sequential Transformer
 
-The core of the retrieval system is a **Sequential Transformer** optimized for next-item prediction. It is inspired by **SASRec**, with several modern architectural and training choices that are common in recent (2023–2024) deep learning stacks.
+The core of the retrieval system is a **Sequential Transformer** optimized for next-item prediction. It is inspired by **SASRec**, with several modern architectural and training choices that are common in recent (2023–2025) deep learning stacks.
 
 ### Architecture
 

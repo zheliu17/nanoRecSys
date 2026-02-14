@@ -299,7 +299,7 @@ if __name__ == "__main__":
         "--user_tower_type",
         type=str,
         choices=["mlp", "transformer"],
-        default="mlp",
+        default="transformer",
         help="Type of user tower to load (if mode includes users)",
     )
 

@@ -474,15 +474,6 @@ class OfflineEvaluator:
             # 2. LogQ
             if log_p is not None:
                 scores_logq = (scores / settings.temperature) + log_p
-                # Note: mask again or apply mask to logq scores?
-                # Usually masking sets to -inf.
-                # If scores was masked, scores/temp is -inf. + log_p is still -inf unless log_p is inf.
-                # Just to be safe, apply mask again or reuse masked scores logic.
-                # scores_logq relies on unmodifed logic usually?
-                # Wait, if I modified `scores` in place, it affects scores_logq computation.
-                # yes, scores[rows,cols] = -inf.
-                # scores_logq = (-inf / temp) + log_p = -inf.
-                # So masking works.
                 _, topk_logq = torch.topk(scores_logq, k=self.max_k, dim=1)
                 preds_logq = topk_logq.cpu().numpy()
                 res_logq = self._batch_metrics(preds_logq, batch_targets)

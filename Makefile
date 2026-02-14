@@ -4,12 +4,23 @@
 PYTHON := python
 PIP := pip
 DOCKER_COMPOSE := docker-compose
+RANKER_ARGS := --mode ranker \
+	--user_tower_type transformer \
+	--epochs 5 \
+	--batch_size 2048 \
+	--random_neg_ratio 0.01 \
+	--lr 1e-3 \
+	--item_lr 0.0 \
+	--num_workers 2 \
+	--warmup_steps 500 \
+	--check_val_every_n_epoch 1
+MINING_ARGS := nanoRecSys.training.mine_negatives_sasrec --batch_size 128 --top_k 100 --skip_top 10 --sampling_ratio 0.2
 
 # Default arguments (can be overridden via command line: make train-retriever ARGS="--epochs 10")
 ARGS :=
 
 # Phony targets
-.PHONY: help install format lint test data train-retriever mine-negatives train-ranker train-all serve stop clean clean-artifacts
+.PHONY: help install format lint test data train-ckpt post-train mine-negatives train-ranker train-all serve stop clean clean-artifacts
 
 # Default target
 all: help
@@ -18,11 +29,11 @@ help:
 	@echo "Available commands:"
 	@echo "  make install         Install dependencies in editable mode"
 	@echo "  make data            Download and process the MovieLens dataset"
-	@echo "  make train-retriever Train the retrieval model (Two-Tower)"
+	@echo "  make train-ckpt      Train retriever checkpoint (hard-coded args)"
+	@echo "  make post-train      Run remaining steps after training (embeddings, mining, ranker, index)"
 	@echo "  make mine-negatives  Mine hard negatives using the trained retriever"
 	@echo "  make train-ranker    Train the ranking model (Cross-Encoder)"
 	@echo "  make build-index     Build FAISS index for retrieval"
-	@echo "  make train-all       Run the full training pipeline (Data -> Retrieval -> Mining -> Ranking -> Indexing)"
 	@echo "  make serve           Start the production serving stack (FastAPI, Redis, Streamlit)"
 	@echo "  make stop            Stop the serving stack"
 	@echo "  make test            Run unit and integration tests"
@@ -35,40 +46,34 @@ install:
 
 # Data Processing
 data:
-	$(PYTHON) -m nanoRecSys.data.build_dataset
+	$(PYTHON) -m nanoRecSys.data.build_dataset --task process
 	$(PYTHON) -m nanoRecSys.data.splits
+	$(PYTHON) -m nanoRecSys.data.build_dataset --task prebuild
 
-# Training Pipeline
 train-retriever:
 	$(PYTHON) -m nanoRecSys.train \
 		--mode retriever \
-		--epochs 5 \
-		--batch_size 4096 \
-		--lr 4e-2 \
-		--num_workers 2 \
-		--build_embeddings True \
+		--user_tower_type transformer \
+		--epochs 300 \
+		--batch_size 128 \
+		--lr 1e-3 \
+		--num_workers 4 \
 		$(ARGS)
 
 mine-negatives:
-	$(PYTHON) -m nanoRecSys.training.mine_negatives --batch_size 1024 --top_k 15
+	$(PYTHON) -m $(MINING_ARGS)
 
 train-ranker:
-	$(PYTHON) -m nanoRecSys.train \
-		--mode ranker \
-		--epochs 1 \
-		--limit_train_batches 0.5 \
-		--batch_size 2048 \
-		--explicit_neg_weight 4.0 \
-		--random_neg_ratio 0.01 \
-		--lr 1e-3 \
-		--item_lr 0.0 \
-		--num_workers 2 \
-		$(ARGS)
+	$(PYTHON) -m nanoRecSys.train $(RANKER_ARGS) $(ARGS)
 
 build-index:
-	$(PYTHON) -m nanoRecSys.indexing.build_faiss_ivfpq --nlist 64 --m 16
+	$(PYTHON) -m nanoRecSys.indexing.build_faiss_flat
 
-train-all: data train-retriever mine-negatives train-ranker build-index
+post-train:
+	$(PYTHON) -m nanoRecSys.indexing.build_embeddings
+	$(PYTHON) -m nanoRecSys.indexing.build_faiss_flat
+	$(PYTHON) -m $(MINING_ARGS)
+	$(PYTHON) -m nanoRecSys.train $(RANKER_ARGS) $(ARGS)
 
 # Serving
 serve:

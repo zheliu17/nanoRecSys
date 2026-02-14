@@ -88,7 +88,7 @@ def create_global_time_split(val_ratio: float = 0.1, test_ratio: float = 0.1):
     np.save(settings.processed_data_dir / "train_items.npy", train["item_idx"].unique())
 
 
-def create_user_time_split(val_k: int = 5, test_k: int = 5):
+def create_user_time_split(val_k: int = 1, test_k: int = 1):
     """
     Split interactions by user, selecting the last k interactions for test/val.
     For each user:

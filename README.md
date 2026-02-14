@@ -47,40 +47,24 @@ cd nanoRecSys
 make install  # (Equivalent to pip install -e .[all])
 ```
 
-### 2. Training & Artifact Generation
-
-To prepare data:
+### 2. Training & Artifact Generation [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/zheliu17/nanoRecSys/blob/main/notebooks/sequential_transformer.ipynb)
 
 ```bash
-make data
+make data # Download and preprocess MovieLens-20M dataset
 ```
 
-Three options for retriever training and artifact generation:
-
-* **Train from scratch (~10 hrs):** Train the high-performance Sequential Transformer.
-
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/zheliu17/nanoRecSys/blob/main/notebooks/sequential_transformer.ipynb)
-[Sequential Transformer Notebook](./notebooks/sequential_transformer.ipynb)
+* **Train from scratch (~10 hrs):** See [Sequential Transformer Notebook](./notebooks/sequential_transformer.ipynb)
 
 ```bash
 # export WANDB_MODE=offline
 make train-retriever
+# Or, download pretrained weights
+# git clone https://huggingface.co/zheliu97/nanoRecSys artifacts
 ```
-
-* **Download Pre-trained:** Skip training and use our hosted artifacts.
-
-```bash
-git clone https://huggingface.co/zheliu97/nanoRecSys artifacts
-```
-
-* **Train Baseline (~5 mins):** Train a simple Matrix Factorization model for quick testing.
-
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/zheliu17/nanoRecSys/blob/main/notebooks/static_baseline_embeddings.ipynb)
-[Baseline Training Notebook](./notebooks/static_baseline_embeddings.ipynb)
 
 ### 3. Ranker Training, Indexing, and Serving
 
-Also see [Sequential Transformer Notebook](./notebooks/sequential_transformer.ipynb)
+*Also see [Sequential Transformer Notebook](./notebooks/sequential_transformer.ipynb)*
 
 ```bash
 make post-train

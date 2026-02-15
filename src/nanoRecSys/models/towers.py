@@ -95,14 +95,12 @@ class TransformerUserTower(nn.Module):
         super().__init__()
 
         if shared_embedding is not None:
-            self.embedding = shared_embedding
-            self.has_shared_embedding = True
+            self.embedding = (
+                shared_embedding.embedding
+            )  # raw embedding, not L2 normalized
         else:
             self.embedding = nn.Embedding(vocab_size, embed_dim)
-            self.has_shared_embedding = False
 
-        # No absolute positional embedding forRoPE
-        # self.pos_embedding = nn.Embedding(max_seq_len, embed_dim)
         self.pos_embedding_type = pos_embedding_type
         if self.pos_embedding_type == "absolute":
             self.pos_embedding = nn.Embedding(max_seq_len, embed_dim)
@@ -196,7 +194,7 @@ class TransformerUserTower(nn.Module):
         lookup_indices = torch.where(
             valid_vals, item_seq - 1, torch.zeros_like(item_seq)
         )
-        x = self.embedding(lookup_indices)
+        x = self.embedding(lookup_indices)  # type: ignore
 
         if self.pos_embedding_type == "absolute":
             positions = torch.arange(seq_len, device=x.device).unsqueeze(0)

@@ -38,12 +38,13 @@ Load tested with `locust` on a CPU-only laptop setup:
 
 ### 1. Installation
 
+*Default installation includes training components only. Use [all] for serving dependencies.*
+
 ```bash
 git clone https://github.com/zheliu17/nanoRecSys.git
 cd nanoRecSys
 
 # Install dependencies (Virtual Environment recommended)
-# Default installation includes training components only. Use [all] for serving dependencies.
 make install  # (Equivalent to pip install -e .[all])
 ```
 

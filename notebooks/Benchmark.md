@@ -33,44 +33,43 @@ The graph below compares `IVF-PQ`, `IVF-SQ` against `FlatIP` (Baseline, Recall=1
 
 ![Synthetic_Expansion_Results](../docs/images/synthetic_expansion_results.png)
 
-## 3. Production Latency (Load Testing)
+## 3. Production Serving Optimization
 
-We performed end-to-end load testing on the full serving stack, mimicking a real-world production environment.
+We performed end-to-end load testing to validate the system's throughput and latency. We compared a **Baseline (PyTorch)** implementation against an **Optimized (ONNX + AsyncIO)** implementation.
+
+### 3.1 Optimization Results
+
+We improved the serving stack by:
+
+1. **Model Quantization/Export:** Migrating from PyTorch Eager mode to **ONNX Runtime**.
+2. **Concurrency:** Moving from synchronous blocking calls to **AsyncIO** with thread-pool offloading for CPU-bound tasks.
+3. **Resource Constraints:** The optimized test was run on restricted hardware (2 vCPUs) to mimic a realistic production container, whereas the baseline had access to the full host (16 Cores).
+
+| Metric | Baseline (PyTorch) | Optimized (ONNX) | Improvement |
+| --- | --- | --- | --- |
+| **Resources** | 16 Cores (Laptop) | **2 vCPUs** (Docker Limit) | **8x Less Compute** |
+| **Throughput** | 24 RPS | **~80 RPS** | **3.3x Higher** |
+| **Embedding Latency** | 75 ms | **36 ms** | **2x Faster** |
+| **Efficiency** | ~1.5 RPS / Core | ~40 RPS / Core | **~25x Efficiency Gain** |
+
+### 3.2 Detailed Latency Breakdown (Optimized)
 
 **Setup:**
 
-* **Index:** FAISS Flat Index (27k items)
-* **Workload:** Hybrid traffic with a mix of cache hits and misses.
-  * The default `locustfile.py` configuration simulates **~30% cold users** (cache-miss path). Adjusting the hot/cold ratio changes the end-to-end latency distribution.
+* **Traffic:** Mixed Workload (30% Cold Users / 70% Cache Hits).
+* **Command:** `locust -f locustfile.py`
 
-**Command:**
+Even under restricted hardware (2 vCPUs), the system maintains sub-60ms median latency. The heavy lifting (Transformer Inference) is handled efficiently by ONNX Runtime.
 
-```bash
-# 1. Build Index
-python -m src.nanoRecSys.indexing.build_faiss_flat
+| Metric | Component | Median (ms) | P95 (ms) | Note |
+| --- | --- | --- | --- | --- |
+| **Total Request** | **POST /recommend** | **51** | **200** | **End-to-End Latency** |
+| Internal | Embedding Gen (ONNX) | 36 | 69 | Cold Path Only (Transformer) |
+| Internal | Ranking (ONNX) | 2 | 5 | Ranker Inference |
+| Internal | Retrieval (FAISS) | 2 | 5 | Nearest Neighbor Search |
+| Internal | Total Compute (Cold Path) | 41 | 76 | |
 
-# 2. Start Stack
-docker-compose up --build -d
-
-# 3. Run Load Test
-locust -f locustfile.py
-```
-
-**Results:** (CPU-only laptop, example run)
-
-* **Throughput:** 24 RPS sustained.
-* **Latency:** 53ms Median / 180ms P95.
-
-Even on CPU-only hardware, the system delivers sub-200ms tail latency. The Cold-Path (Transformer Inference) is the dominant cost (~90ms).
-
-**Detailed Breakdown:**
-
-| Metric | Component | Median (ms) | P95 (ms) | P99 (ms) | Note |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| **Total Request** | **POST /recommend** | **53** | **180** | **360** | **End-to-End Latency** |
-| Internal | Embedding Generation | 75 | 170 | 380 | Transformer Inference (Cold Path) |
-| Internal | Ranking | 6 | 18 | 42 | Ranker Inference |
-| Internal | Retrieval (FAISS) | 2 | 4 | 7 | Nearest Neighbor Search |
-| Internal | Server Processing | 1 | 140 | 320 | Total Python Time |
+> **Note on Tail Latency (P99):**
+> While the execution time (Internal metrics) remains stable, the End-to-End P99 latency spikes to ~580ms. When the request rate (~80 RPS) saturates the workers, incoming requests queue up in the executor before processing begins. The delta between Total Latency and Total Compute (Cold Path) represents this **Queuing Time**.
 
 ![Load_Testing_Latency](../docs/images/load_testing_latency.png)

@@ -49,7 +49,6 @@ def generate_embeddings(
 
             batch_emb = tower(batch_ids)
             all_embeddings[i:batch_end] = batch_emb.cpu().numpy()
-    tqdm.write("")
 
     embeddings = all_embeddings
 
@@ -313,7 +312,7 @@ if __name__ == "__main__":
         build_item_embeddings(batch_size=args.batch_size, device=args.device)
 
     if args.mode in ["users", "all"]:
-        logger.info("\n" + "=" * 60)
+        logger.info("=" * 60)
         logger.info("Building User Embeddings")
         logger.info("=" * 60)
         build_user_embeddings(
@@ -322,6 +321,6 @@ if __name__ == "__main__":
             user_tower_type=args.user_tower_type,
         )
 
-    logger.info("\n" + "=" * 60)
+    logger.info("=" * 60)
     logger.info("Done!")
     logger.info("=" * 60)

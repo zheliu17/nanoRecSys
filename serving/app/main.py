@@ -27,6 +27,13 @@ service = None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    import concurrent.futures
+    import asyncio
+
+    # We want a single thread for compute to minimize context switching/contention
+    loop = asyncio.get_running_loop()
+    loop.set_default_executor(concurrent.futures.ThreadPoolExecutor(max_workers=1))
+
     global service
     logger.info("Initializing Recommendation Service...")
     service = RecommendationService()
@@ -47,7 +54,7 @@ app = FastAPI(title="NanoRecSys Serving", lifespan=lifespan)
         "and `include_history=true` to include the user's recent history in the response."
     ),
 )
-def recommend(request: RecommendRequest):
+async def recommend(request: RecommendRequest):
     """Get recommendations for a user.
 
     - `user_id`: numeric id of the user
@@ -59,7 +66,7 @@ def recommend(request: RecommendRequest):
         raise HTTPException(status_code=503, detail="Service not initialized")
 
     try:
-        result = service.get_recommendations(
+        result = await service.get_recommendations(
             user_id=request.user_id,
             k=request.k,
             explain=request.explain,

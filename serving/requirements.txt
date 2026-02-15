@@ -8,3 +8,5 @@ pyarrow
 pydantic
 pydantic-settings
 # torch is installed separately in the Dockerfile
+onnxruntime
+onnx

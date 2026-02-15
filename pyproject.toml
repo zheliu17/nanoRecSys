@@ -31,6 +31,8 @@ all = [
     "locust",
     "matplotlib",
     "nbstripout",
+    "onnxruntime",
+    "onnxscript",
     "redis",
     "streamlit",
     "uvicorn",

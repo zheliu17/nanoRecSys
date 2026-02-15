@@ -22,6 +22,12 @@ COPY serving/app /app/app
 # Set python path to include src
 ENV PYTHONPATH=/app/src
 
+ENV OMP_NUM_THREADS=1
+ENV MKL_NUM_THREADS=1
+ENV OPENBLAS_NUM_THREADS=1
+ENV VECLIB_MAXIMUM_THREADS=1
+ENV NUMEXPR_NUM_THREADS=1
+
 # Create non-root user early so we can chown files
 RUN useradd -m -u 1000 myuser
 
@@ -35,4 +41,4 @@ USER myuser
 EXPOSE 8000
 
 # Run
-CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]

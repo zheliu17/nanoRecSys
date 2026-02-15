@@ -16,7 +16,7 @@ import json
 import logging
 import os
 
-import redis
+import redis.asyncio as redis
 
 logger = logging.getLogger(__name__)
 
@@ -27,32 +27,35 @@ class RedisCache:
         host = os.getenv("REDIS_HOST", host)
         port = int(os.getenv("REDIS_PORT", port))
         try:
+            self.host = host
+            self.port = port
+            self.db = db
             self.client = redis.Redis(
-                host=host,
-                port=port,
-                db=db,
+                host=self.host,
+                port=self.port,
+                db=self.db,
                 decode_responses=True,
                 socket_connect_timeout=1,
             )
-            self.client.ping()
             self.enabled = True
         except Exception:
-            logger.warning("Redis not available, caching disabled.")
-            self.enabled = False
+            logger.warning("Redis init failed (will retry on connect), enabled=True")
+            self.enabled = True
 
-    def get(self, key: str):
+    async def get(self, key: str):
         if not self.enabled:
             return None
         try:
-            val = self.client.get(key)
+            val = await self.client.get(key)
             return json.loads(val) if val else None  # type: ignore
         except Exception:
             return None
 
-    def set(self, key: str, value: dict, expire=300):
+    async def set(self, key: str, value: dict, expire=300):
         if not self.enabled:
             return
         try:
-            self.client.setex(key, expire, json.dumps(value))
+            val_str = json.dumps(value)
+            await self.client.setex(key, expire, val_str)
         except Exception:
             pass

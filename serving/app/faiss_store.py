@@ -23,6 +23,8 @@ logger = logging.getLogger(__name__)
 
 class FaissStore:
     def __init__(self, artifacts_dir: Path, index_type="flat"):  # ivf or flat
+        faiss.omp_set_num_threads(1)
+
         self.artifacts_dir = artifacts_dir
         self.index = None
 

@@ -4,7 +4,7 @@ import torch.nn as nn
 
 from nanoRecSys.config import settings
 from nanoRecSys.models.ranker import MLPRanker
-from nanoRecSys.models.towers import TransformerUserTower
+from nanoRecSys.models.towers import ItemTower, TransformerUserTower
 
 
 class UserTowerWrapper(nn.Module):
@@ -48,6 +48,14 @@ def main():
 
     # 1. Export User Tower (Transformer)
     print("Exporting User Tower...")
+    dummy_item_tower = ItemTower(
+        vocab_size=n_items,
+        embed_dim=settings.embed_dim,
+        output_dim=settings.tower_out_dim,
+        hidden_dims=settings.towers_hidden_dims,
+        use_projection=settings.use_projection,
+    )
+
     user_tower = TransformerUserTower(
         vocab_size=n_items,
         embed_dim=settings.tower_out_dim,
@@ -57,23 +65,12 @@ def main():
         n_layers=settings.transformer_layers,
         dropout=settings.transformer_dropout,
         swiglu_hidden_dim=settings.swiglu_hidden_dim,
+        shared_embedding=dummy_item_tower,  # <--- Pass the shared embedding
     )
 
     tower_path = artifacts_dir / "user_tower.pth"
     if tower_path.exists():
         state_dict = torch.load(tower_path, map_location="cpu")
-
-        if "embedding.embedding.weight" in state_dict:
-            print("Detected wrapped embedding in checkpoint. Adjusting keys...")
-            new_state_dict = {}
-            for k, v in state_dict.items():
-                if k.startswith("embedding.embedding."):
-                    new_key = k.replace("embedding.embedding.", "embedding.")
-                    new_state_dict[new_key] = v
-                else:
-                    new_state_dict[k] = v
-            state_dict = new_state_dict
-
         user_tower.load_state_dict(state_dict)
         print("Loaded user tower weights.")
     else:
@@ -101,7 +98,7 @@ def main():
             "item_seq": {0: "batch_size"},
             "user_embedding": {0: "batch_size"},
         },
-        opset_version=18,  # Use newer opset to avoid conversion issues
+        opset_version=18,
     )
     print(f"User Tower exported to {artifacts_dir / 'user_tower.onnx'}")
 

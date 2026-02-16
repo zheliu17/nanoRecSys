@@ -17,7 +17,7 @@
 
 ## Evaluation & Benchmarks
 
-*See [Training.md](./notebooks/Training.md) for architectural deep-dives and [Benchmark.md](./notebooks/Benchmark.md) for latency analysis.*
+*See [Training.md](./docs/Training.md) for architectural deep-dives and [Benchmark.md](./docs/Benchmark.md) for latency analysis.*
 
 #### Offline Performance
 
@@ -48,13 +48,13 @@ cd nanoRecSys
 make install  # (Equivalent to pip install -e .[all])
 ```
 
-### 2. Training & Artifact Generation [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/zheliu17/nanoRecSys/blob/main/notebooks/sequential_transformer.ipynb)
+### 2. Training & Artifact Generation [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/zheliu17/nanoRecSys/blob/main/docs/sequential_transformer.ipynb)
 
 ```bash
 make data # Download and preprocess MovieLens-20M dataset
 ```
 
-* **Train from scratch (~10 hrs):** See [Sequential Transformer Notebook](./notebooks/sequential_transformer.ipynb)
+* **Train from scratch (~10 hrs):** See [Sequential Transformer Notebook](./docs/sequential_transformer.ipynb)
 
 ```bash
 # export WANDB_MODE=offline
@@ -65,7 +65,7 @@ make train-retriever
 
 ### 3. Ranker Training, Indexing, and Serving
 
-*Also see [Sequential Transformer Notebook](./notebooks/sequential_transformer.ipynb)*
+*Also see [Sequential Transformer Notebook](./docs/sequential_transformer.ipynb)*
 
 ```bash
 make post-train
@@ -105,8 +105,8 @@ graph TD
 .
 ├── artifacts/             # Trained models & indices (GitIgnored)
 ├── data/                  # Dataset storage
+├── docs/                  # Training & Analysis documentation
 ├── frontend/              # Streamlit UI
-├── notebooks/             # Training & Analysis Notebooks
 ├── serving/               # FastAPI Inference Server
 ├── src/
 │   └── nanoRecSys/        # Core Library

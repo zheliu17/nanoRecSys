@@ -7,12 +7,14 @@ venv
 .envrc
 .git
 .gitignore
-data
 artifacts
+data
+docs
+logs
+scripts
+tests
 *.sqlite3
 *.log
-tests
-notebooks
 *.ipynb
 build
 dist

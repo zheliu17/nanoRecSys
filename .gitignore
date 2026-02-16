@@ -9,7 +9,7 @@ data/*
 !nanoRecSys/data/
 !data/.gitkeep
 wandb/
-artifacts/
+artifacts/*
 !artifacts/.gitkeep
 nanoRecSys.egg-info
 logs/

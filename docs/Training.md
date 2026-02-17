@@ -25,7 +25,7 @@ Comparing our implementation against reported results in recent literature:
 
 | Method | Source | HitRate@10 | NDCG@10 |
 | :--- | :--- | :--- | :--- |
-| **Ours** | | **0.2857** | **0.1622** |
+| **Ours** | | **0.2871** | **0.1617** |
 | SASRec (Vanilla BCE) | Klenitskiy et al. '23[^4] | 0.2001 | 0.1067 |
 | SASRec (Cross-Entropy) | Klenitskiy et al. '23[^4] | 0.2983 | 0.1833 |
 | SASRec | Zhai et al. '24[^1] | 0.2906 | 0.1621 |
@@ -48,7 +48,7 @@ Below are the configurations selected based on **our experiments** and their ali
 1. **RoPE:** Our experiments suggest RoPE improves performance over learnable absolute embeddings.
 2. **Embedding Dimension:** 256. Found to be optimal in our tests (consistent with [^1][^2][^3][^4][^5]).
 3. **Model Depth:** 4 Layers, 8 Heads. Our experiments confirm that this larger capacity (vs original SASRec's 2 layers) improves performance (also see [^3][^5]).
-4. **Dropout:** 0.1 applied to both attention and feedforward layers. A smaller dropout slightly improves performance in our implementation.
+4. **Dropout:** Similar to [^3][^5], we find 0.2 dropout slightly improves performance.
 5. **SwiGLU:** Experiments show SwiGLU requires a larger expansion factor (4x) to perform well (also see [^3]).
 6. **Negatives:** In-batch negatives performs similar to the Sampled Softmax approach[^4] with a large number of negatives (3000). Sampled 256 negatives are not optimal.
 7. **Loss Function:** InfoNCE with a fixed, low temperature ($ \tau=0.05 $). Our experiments suggest that a low temperature is crucial for performance when using cosine similarity (consistent with [^1][^5]). Decoupled Contrastive Learning (DCL) doesn't show significant improvements in our tests.
@@ -57,7 +57,7 @@ Below are the configurations selected based on **our experiments** and their ali
 ## Matrix Factorization Baseline
 
 [Baseline Training Notebook](./static_baseline_embeddings.ipynb)
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/zheliu17/nanoRecSys/blob/main/notebooks/static_baseline_embeddings.ipynb)
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/zheliu17/nanoRecSys/blob/main/docs/static_baseline_embeddings.ipynb)
 
 ## Ranker
 
@@ -77,6 +77,6 @@ The ranker provides reasonable performance. Even without item IDs (simulating co
 
 | Method | HitRate@10 | NDCG@10 |
 | :--- | :--- | :--- |
-| Ours (Retriever) | 0.2857 | 0.1622 |
-| Ranker (ID Masked) | 0.1538 | 0.0824 |
+| Ours (Retriever) | 0.2871 | 0.1617 |
+| Ranker (ID Masked) | 0.1554 | 0.0823 |
 | Popularity Baseline | 0.0513 | 0.0255 |

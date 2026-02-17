@@ -3,16 +3,16 @@
 
 # nanoRecSys: Production-Style Sequential Recommender System
 
-**nanoRecSys** is an end-to-end recommender system project designed to reflect real production constraints (latency, caching, indexing, and operational workflows). It aims to bridge research ideas (modern sequential retrieval) and practical serving (CPU-friendly inference + vector search).
+**nanoRecSys** is an end-to-end recommender system project designed to reflect real production constraints (latency, caching, indexing, and operational workflows). It aims to bridge research ideas (**modern sequential retrieval**) and practical serving (CPU-friendly inference + vector search).
 
 <https://github.com/user-attachments/assets/6d0c4713-c8ab-43ba-b197-d2602244cf35>
 
 ## Key Features
 
-* **Modern Retrieval Architecture:** Implemented a **Sequential Transformer** (SASRec-based) enhanced with RoPE, SwiGLU, and InfoNCE Loss.
-  * **0.286 HR@10** on MovieLens-20M, outperforming standard SASRec baselines by ~40% and matching optimized implementations (e.g., BERT4Rec).
-* **High-Throughput Serving:** Built a FastAPI inference engine backed by Redis (caching)   and **FAISS** (vector search).
-* **Production Engineering:** Features a complete Docker Compose orchestration, CI/CD workflows, and a Streamlit frontend.
+* **Modern Retrieval Architecture:** A **Sequential Transformer** (SASRec-based) enhanced with RoPE, SwiGLU, and InfoNCE Loss.
+  * **0.287 HR@10** on MovieLens-20M, outperforming standard SASRec baselines by ~40% and matching optimized implementations (e.g., BERT4Rec).
+* **High-Throughput Serving:** ONNX inference engine (FastAPI + AsyncIO) backed by Redis (caching) and **FAISS** (vector search).
+* **Production Engineering:** A complete Docker Compose orchestration, CI/CD workflows, and a Streamlit frontend.
 * **Full-Lifecycle Implementation:** From raw data processing and offline training (PyTorch) to online serving and latency benchmarking.
 
 ## Evaluation & Benchmarks
@@ -23,16 +23,16 @@
 
 Compared against recent literature (ICML'24, WWW'25), our retrieval model performs competitively:
 
-| Metric | Our Model | Standard SASRec | SOTA (HSTU/FuXi-$\alpha$) |
+| Metric | Our Model | Standard SASRec | SOTA (HSTU/FuXi-α) |
 | :--- | :--- | :--- | :--- |
-| **HR@10** | **0.286** | ~0.20 - 0.29 | ~0.33 |
+| **HR@10** | **0.287** | ~0.20 - 0.29 | ~0.33 |
 
 #### Online Latency
 
 Load tested with `locust` on a CPU-only laptop setup:
 
-* **P95 Latency:** 180ms (example run; workload and hardware dependent)
-* **Cold-path inference:** <90ms (example run; transformer user embedding + FAISS + ranking)
+* **Cold-path inference:** ~23ms (2 vCPU; transformer user embedding + FAISS + ranking)
+* **P95 Latency:** 180ms (end-to-end)
 
 ## Quick Start
 

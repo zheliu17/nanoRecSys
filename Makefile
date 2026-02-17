@@ -74,6 +74,7 @@ post-train:
 	$(PYTHON) -m nanoRecSys.indexing.build_faiss_flat
 	$(PYTHON) -m $(MINING_ARGS)
 	$(PYTHON) -m nanoRecSys.train $(RANKER_ARGS) $(ARGS)
+	$(PYTHON) -m scripts.export_onnx
 
 # Serving
 serve:

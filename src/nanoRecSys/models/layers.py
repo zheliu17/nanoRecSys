@@ -34,7 +34,7 @@ class RMSNorm(nn.Module):
 
 
 class RotaryEmbedding(nn.Module):
-    def __init__(self, dim, max_seq_len=512):
+    def __init__(self, dim, max_seq_len=settings._rope_default_max_seq_len):
         super().__init__()
         assert dim % 2 == 0, "RoPE dimension must be even"
         rope_base = settings.rope_base
@@ -49,20 +49,23 @@ class RotaryEmbedding(nn.Module):
         self.register_buffer("cached_sin", emb.sin(), persistent=False)
 
     def forward(self, x, seq_len):
-        if (
-            self.cached_cos is None
-            or self.cached_cos.shape[0] < seq_len
-            or self.cached_cos.device != x.device
-        ):
-            t = torch.arange(
-                max(seq_len, self.max_seq_len),
-                device=x.device,
-                dtype=self.inv_freq.dtype,  # type: ignore
-            )
-            freqs = torch.outer(t, self.inv_freq)  # type: ignore
-            emb = torch.cat((freqs, freqs), dim=-1)
-            self.cached_cos = emb.cos()
-            self.cached_sin = emb.sin()
+        # Skip cache update during ONNX export to avoid TracerWarning
+        # _rope_default_max_seq_len should be large enough
+        if not torch.onnx.is_in_onnx_export():
+            if (
+                self.cached_cos is None
+                or self.cached_cos.shape[0] < seq_len
+                or self.cached_cos.device != x.device
+            ):
+                t = torch.arange(
+                    max(seq_len, self.max_seq_len),
+                    device=x.device,
+                    dtype=self.inv_freq.dtype,  # type: ignore
+                )
+                freqs = torch.outer(t, self.inv_freq)  # type: ignore
+                emb = torch.cat((freqs, freqs), dim=-1)
+                self.cached_cos = emb.cos()
+                self.cached_sin = emb.sin()
 
         return (
             self.cached_cos[:seq_len].to(x.dtype),  # type: ignore

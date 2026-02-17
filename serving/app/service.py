@@ -158,7 +158,7 @@ class RecommendationService:
 
         # Load User Tower
         logger.info(f"Loading User Tower ({settings.user_tower_type})...")
-        onnx_tower_path = settings.artifacts_dir / "user_tower.onnx"
+        onnx_tower_path = settings.artifacts_dir / "user_tower.quant.onnx"
         if ONNX_AVAILABLE and onnx_tower_path.exists():
             logger.info(f"Loading User Tower from ONNX: {onnx_tower_path}")
             self.user_tower = ONNXUserTower(onnx_tower_path)

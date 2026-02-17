@@ -9,7 +9,6 @@ repos:
         args: ["--maxkb=10000"] # Prevent committing model weights >10MB by accident
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    # Ruff version. Ensure this matches pyproject.toml
     rev: v0.14.13
     hooks:
       - id: ruff

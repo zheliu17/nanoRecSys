@@ -69,6 +69,7 @@ class Settings(BaseSettings):
 
     # --- Transformer tower settings ---
     max_seq_len: int = 200
+    _rope_default_max_seq_len: int = 512  # Only used for RoPE cache initialization
     min_seq_len: int = 0  # Minimum sequence length to keep a user
     seq_step_size: int = 96  # Sliding-window step size (used for data generation)
     # If True, train using one sequence per user formed from the last `max_seq_len` items
@@ -76,7 +77,7 @@ class Settings(BaseSettings):
 
     transformer_heads: int = 8
     transformer_layers: int = 4
-    transformer_dropout: float = 0.1
+    transformer_dropout: float = 0.2
     positional_embedding_type: str = "rope"  # "rope" or "absolute"
     rope_base: int = 500
     # None to use default, rounded 8/3* embed_dim

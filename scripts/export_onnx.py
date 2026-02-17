@@ -1,6 +1,7 @@
 import numpy as np
 import torch
 import torch.nn as nn
+from onnxruntime.quantization import QuantType, quant_pre_process, quantize_dynamic
 
 from nanoRecSys.config import settings
 from nanoRecSys.models.ranker import MLPRanker
@@ -90,7 +91,7 @@ def main():
 
     torch.onnx.export(
         user_tower_wrapper,
-        dummy_seq,  # type: ignore
+        (dummy_seq,),
         artifacts_dir / "user_tower.onnx",
         input_names=["item_seq"],
         output_names=["user_embedding"],
@@ -98,7 +99,8 @@ def main():
             "item_seq": {0: "batch_size"},
             "user_embedding": {0: "batch_size"},
         },
-        opset_version=18,
+        opset_version=17,
+        dynamo=False,
     )
     print(f"User Tower exported to {artifacts_dir / 'user_tower.onnx'}")
 
@@ -134,29 +136,46 @@ def main():
     dummy_year = torch.zeros(batch_size, dtype=torch.long)
     dummy_pop = torch.randn(batch_size, 1)
 
-    torch.onnx.export(
-        ranker_wrapper,
-        (dummy_user_emb, dummy_item_emb, dummy_genre, dummy_year, dummy_pop),
-        artifacts_dir / "ranker_model.onnx",
-        input_names=[
+    ranker_export_kwargs = {
+        "input_names": [
             "user_emb",
             "item_emb",
             "genre_multihot",
             "year_idx",
             "popularity",
         ],
-        output_names=["score"],
-        dynamic_axes={
+        "output_names": ["score"],
+        "opset_version": 18,
+        "dynamic_shapes": {
             "user_emb": {0: "batch_size"},
             "item_emb": {0: "batch_size"},
             "genre_multihot": {0: "batch_size"},
             "year_idx": {0: "batch_size"},
             "popularity": {0: "batch_size"},
-            "score": {0: "batch_size"},
         },
-        opset_version=18,
+    }
+
+    torch.onnx.export(
+        ranker_wrapper,
+        (dummy_user_emb, dummy_item_emb, dummy_genre, dummy_year, dummy_pop),
+        artifacts_dir / "ranker_model.onnx",
+        **ranker_export_kwargs,
     )
     print(f"Ranker exported to {artifacts_dir / 'ranker_model.onnx'}")
+
+    # Pre-process to fix shape inference issues
+    quant_pre_process(
+        input_model_path=str(artifacts_dir / "user_tower.onnx"),
+        output_model_path=str(artifacts_dir / "user_tower.prep.onnx"),
+    )
+    quantize_dynamic(
+        model_input=artifacts_dir / "user_tower.prep.onnx",
+        model_output=artifacts_dir / "user_tower.quant.onnx",
+        weight_type=QuantType.QInt8,
+    )
+    print(
+        f"User Tower quantized and saved to {artifacts_dir / 'user_tower.quant.onnx'}"
+    )
 
 
 if __name__ == "__main__":

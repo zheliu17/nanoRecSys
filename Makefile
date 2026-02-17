@@ -32,7 +32,7 @@ help:
 	@echo "  make train-ckpt      Train retriever checkpoint (hard-coded args)"
 	@echo "  make post-train      Run remaining steps after training (embeddings, mining, ranker, index)"
 	@echo "  make mine-negatives  Mine hard negatives using the trained retriever"
-	@echo "  make train-ranker    Train the ranking model (Cross-Encoder)"
+	@echo "  make train-ranker    Train the ranking model"
 	@echo "  make build-index     Build FAISS index for retrieval"
 	@echo "  make serve           Start the production serving stack (FastAPI, Redis, Streamlit)"
 	@echo "  make stop            Stop the serving stack"

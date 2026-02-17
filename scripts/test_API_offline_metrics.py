@@ -1,8 +1,10 @@
-import pandas as pd
-import numpy as np
-import requests
 import random
+
+import numpy as np
+import pandas as pd
+import requests
 from tqdm import tqdm
+
 from nanoRecSys.config import settings
 
 PROJECT_ROOT = settings.project_root

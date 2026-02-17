@@ -60,7 +60,7 @@ make data # Download and preprocess MovieLens-20M dataset
 # export WANDB_MODE=offline
 make train-retriever
 # Or, download pretrained weights
-# git clone https://huggingface.co/zheliu97/nanoRecSys artifacts
+# wget -nv -P artifacts/ https://huggingface.co/zheliu97/nanoRecSys/resolve/main/{item,user}_tower.pth
 ```
 
 ### 3. Ranker Training, Indexing, and Serving

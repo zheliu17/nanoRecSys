@@ -59,24 +59,26 @@ Below are the configurations selected based on **our experiments** and their ali
 [Baseline Training Notebook](./static_baseline_embeddings.ipynb)
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/zheliu17/nanoRecSys/blob/main/docs/static_baseline_embeddings.ipynb)
 
-## Ranker
+## Ranker: Hybrid MLP
 
-*A new ranker is in progress*
+The second stage is a re-ranking model designed to introduce **content-based signals** (Genre, Year) alongside the collaborative filtering signals from the Retriever.
 
-The second stage is a re-ranking model trained to refine the candidates retrieved by the Transformer.
+### Architecture
 
-**Current Architecture:**
+* **Type:** Feature-Interaction MLP.
+* **Goal:** Address the "Cold Start" problem where the Sequential Retriever (SASRec) fails due to missing Item IDs.
+* **Inputs:**
+  * User/Item ID Embeddings
+  * **Explicit Feature Interactions:** Element-wise product of User/Item vectors.
+  * **Metadata:** Genre, Year embeddings.
+  * **Context:** Normalized popularity, `IsUnknown` flag.
 
-* **Type:** MLP Ranker (Interaction-aware).
-* **Inputs:** User/Item ID Embeddings, Element-wise interaction product, Genre/Year embeddings, Normalized popularity, and an `IsUnknown` flag (for cold-start handling).
-* **Training:** Trained on hard negatives mined from the Transformer retriever.
+### Performance & Analysis
 
-We utilize ID Dropout (probability to zero-out ID embeddings) during training. This helps the Ranker generalize to new items where ID embeddings are not yet well-learned.
+We evaluated the Ranker's ability to handle **Cold-Start Items** by masking Item IDs during inference (forcing the model to rely on metadata). Our Ranker allows the system to serve new items with reasonable accuracy:
 
-The ranker provides reasonable performance. Even without item IDs (simulating cold start), it captures signal from metadata (Genre/Year/Popularity).
-
-| Method | HitRate@10 | NDCG@10 |
-| :--- | :--- | :--- |
-| Ours (Retriever) | 0.2871 | 0.1617 |
-| Ranker (ID Masked) | 0.1554 | 0.0823 |
-| Popularity Baseline | 0.0513 | 0.0255 |
+| Method | Scenario | HitRate@10 | Notes |
+| :--- | :--- | :--- | :--- |
+| **Ours (Retriever)** | Warm Items (Standard) | **0.2871** | SOTA-level retrieval on known items |
+| **Ranker (ID Masked)** | **Cold Start (Simulated)** | **0.1554** | **3x improvement over baseline** |
+| Popularity Baseline |  | 0.0513 | Default fallback |

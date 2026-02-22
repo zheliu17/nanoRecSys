@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Optional, Union
 
 import torch
 import torch.nn as nn
@@ -33,10 +32,10 @@ class InfoNCELoss(nn.Module):
         self,
         user_embeddings: torch.Tensor,
         item_embeddings: torch.Tensor,
-        candidate_probs: "Optional[torch.Tensor]" = None,
-        user_ids: "Optional[torch.Tensor]" = None,
-        item_ids: "Optional[torch.Tensor]" = None,
-        temperature: "Optional[Union[float, torch.Tensor]]" = None,
+        candidate_probs: "torch.Tensor | None" = None,
+        user_ids: "torch.Tensor | None" = None,
+        item_ids: "torch.Tensor | None" = None,
+        temperature: "float | torch.Tensor | None" = None,
     ) -> torch.Tensor:
         """
         Args:
@@ -97,10 +96,10 @@ class DCLLoss(nn.Module):
         self,
         user_embeddings: torch.Tensor,
         item_embeddings: torch.Tensor,
-        candidate_probs: "Optional[torch.Tensor]" = None,
-        user_ids: "Optional[torch.Tensor]" = None,
-        item_ids: "Optional[torch.Tensor]" = None,
-        temperature: "Optional[Union[float, torch.Tensor]]" = None,
+        candidate_probs: "torch.Tensor | None" = None,
+        user_ids: "torch.Tensor | None" = None,
+        item_ids: "torch.Tensor | None" = None,
+        temperature: "float | torch.Tensor | None" = None,
     ) -> torch.Tensor:
         """
         Args:
@@ -170,7 +169,7 @@ class MarginRankingLossWrapper(nn.Module):
         self,
         logits: torch.Tensor,
         labels: torch.Tensor,
-        weights: Optional[torch.Tensor] = None,
+        weights: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """
         Args:
@@ -204,7 +203,7 @@ class BPRLossWrapper(nn.Module):
         self,
         logits: torch.Tensor,
         labels: torch.Tensor,
-        weights: Optional[torch.Tensor] = None,
+        weights: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """
         Args:

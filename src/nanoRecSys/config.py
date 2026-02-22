@@ -19,7 +19,6 @@ common project paths (data, processed, artifacts).
 """
 
 from pathlib import Path
-from typing import Union
 
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -40,12 +39,12 @@ class Settings(BaseSettings):
     # Parent path for generated embeddings (src/nanoRecSys/training/mine_negatives_sasrec.py)
     # This file can be large (10GB+) and you may want to set it to a different location
     sasrec_user_embs_npy_path: Path = artifacts_dir
-    ckpt_path: Union[str, Path, None] = None  # Optional checkpoint path
+    ckpt_path: str | Path | None = None  # Optional checkpoint path
 
     # --- Dataset ---
     ml_20m_url: str = "https://files.grouplens.org/datasets/movielens/ml-20m.zip"
     # Minimum rating to include when building the retrieval dataset. Set to 0 or None to include all.
-    retrieval_threshold: Union[float, None] = 0
+    retrieval_threshold: float | None = 0
     min_user_interactions: int = 5  # Exclude users with too few interactions
     evaluation_positive_threshold: float = (
         0  # Rating >= this is positive during evaluation
@@ -58,7 +57,7 @@ class Settings(BaseSettings):
     # Rating <= this is treated as an explicit negative for ranker; set to None to ignore
     # This will affect both training and validation steps.
     # For disable training only, see `explicit_neg_weight` in the training config below.
-    ranker_negative_threshold: Union[float, None] = None
+    ranker_negative_threshold: float | None = None
 
     # --- MLP tower parameters ---
     embed_dim: int = 256
@@ -81,7 +80,7 @@ class Settings(BaseSettings):
     positional_embedding_type: str = "rope"  # "rope" or "absolute"
     rope_base: int = 500
     # None to use default, rounded 8/3* embed_dim
-    swiglu_hidden_dim: Union[int, None] = 1024
+    swiglu_hidden_dim: int | None = 1024
 
     # --- Loss & negative sampling ---
     # Use logQ correction for in-batch loss; affects evaluation and in-batch training negatives.
@@ -101,7 +100,7 @@ class Settings(BaseSettings):
     batch_size: int = 128
     learning_rate: float = 1e-3
     max_steps: int = -1  # -1 disables a global step cap
-    limit_train_batches: Union[float, int] = 1.0
+    limit_train_batches: float | int = 1.0
     num_workers: int = 0
     pin_memory: bool = True
     check_val_every_n_epoch: int = 3

@@ -15,7 +15,6 @@
 import os
 import re
 from pathlib import Path
-from typing import Optional, Union
 
 import numpy as np
 import pandas as pd
@@ -133,8 +132,8 @@ class InteractionsDataset(Dataset):
     def __init__(
         self,
         interactions_path: str,
-        positive_threshold: Optional[float] = None,
-        negative_threshold: Optional[float] = None,
+        positive_threshold: float | None = None,
+        negative_threshold: float | None = None,
     ):
         self.df = pd.read_parquet(interactions_path)
 
@@ -266,8 +265,8 @@ class RankerTrainDataset(Dataset):
         interactions_path: str,
         hard_neg_path: str,
         random_neg_path: str,
-        pos_threshold: Union[float, None],
-        neg_threshold: Union[float, None],
+        pos_threshold: float | None,
+        neg_threshold: float | None,
         explicit_neg_weight: float,
         random_neg_ratio: float,
     ):
@@ -361,10 +360,10 @@ class RankerEvalDataset(Dataset):
     def __init__(
         self,
         interactions_path: str,
-        negatives_path: Optional[str],
+        negatives_path: str | None,
         mode: str,
         pos_threshold: float,
-        neg_threshold: Optional[float] = None,
+        neg_threshold: float | None = None,
     ):
         logger = get_logger()
         data_blocks = []

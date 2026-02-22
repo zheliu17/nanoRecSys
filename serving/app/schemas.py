@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import List, Optional
+from typing import List
 
 from pydantic import BaseModel, Field
 
@@ -36,13 +36,13 @@ class RecommendResponse(BaseModel):
     scores: List[float] = Field(
         ..., description="Corresponding relevance scores for each recommended item"
     )
-    explanations: Optional[List[str]] = Field(
+    explanations: list[str] | None = Field(
         None, description="Optional human-readable explanations for recommendations"
     )
-    debug_timing: Optional[dict] = Field(
+    debug_timing: dict | None = Field(
         None, description="Optional debug timing information (for development)"
     )
-    history: Optional[List[int]] = Field(
+    history: list[int] | None = Field(
         None,
         description="Optional user history included when `include_history` is true",
     )

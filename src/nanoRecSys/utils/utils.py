@@ -14,8 +14,6 @@
 
 """Training utilities for nanoRecSys."""
 
-from typing import Union
-
 import numpy as np
 import pandas as pd
 import torch
@@ -261,7 +259,7 @@ class OnDemandEmbeddings:
 
 
 def collate_fn_with_embeddings(
-    batch, user_embeddings: Union[OnDemandEmbeddings, torch.Tensor]
+    batch, user_embeddings: OnDemandEmbeddings | torch.Tensor
 ):
     """Collate function that loads embeddings on-demand for the batch.
 

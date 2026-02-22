@@ -13,7 +13,7 @@
 # limitations under the License.
 
 import math
-from typing import List, Optional
+from typing import List
 
 import torch
 import torch.nn as nn
@@ -88,8 +88,8 @@ class TransformerUserTower(nn.Module):
         n_heads: int,
         n_layers: int,
         dropout: float,
-        swiglu_hidden_dim: Optional[int] = None,
-        shared_embedding: Optional[nn.Module] = None,
+        swiglu_hidden_dim: int | None = None,
+        shared_embedding: nn.Module | None = None,
         pos_embedding_type: str = settings.positional_embedding_type,
     ):
         super().__init__()

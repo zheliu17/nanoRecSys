@@ -12,13 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import List, Union
+from typing import List
 
 import numpy as np
 
 
 def recall_at_k(
-    predictions: np.ndarray, targets: List[Union[List[int], np.ndarray]], k: int
+    predictions: np.ndarray, targets: List[list[int] | np.ndarray], k: int
 ) -> float:
     """
     Compute Mean Recall@K.
@@ -47,7 +47,7 @@ def recall_at_k(
 
 
 def ndcg_at_k(
-    predictions: np.ndarray, targets: List[Union[List[int], np.ndarray]], k: int
+    predictions: np.ndarray, targets: List[list[int] | np.ndarray], k: int
 ) -> float:
     """
     Compute Mean NDCG@K (assuming binary relevance).
@@ -82,7 +82,7 @@ def ndcg_at_k(
 
 
 def hit_rate_at_k(
-    predictions: np.ndarray, targets: List[Union[List[int], np.ndarray]], k: int
+    predictions: np.ndarray, targets: List[list[int] | np.ndarray], k: int
 ) -> float:
     """
     Compute Mean Hit Rate @ K.
@@ -103,7 +103,7 @@ def hit_rate_at_k(
 
 
 def mrr_at_k(
-    predictions: np.ndarray, targets: List[Union[List[int], np.ndarray]], k: int
+    predictions: np.ndarray, targets: List[list[int] | np.ndarray], k: int
 ) -> float:
     """
     Compute Mean Reciprocal Rank @ K.
@@ -129,7 +129,7 @@ def mrr_at_k(
 
 def compute_batch_metrics(
     predictions: np.ndarray,
-    targets: List[Union[List[int], np.ndarray]],
+    targets: List[list[int] | np.ndarray],
     k_list: List[int],
 ) -> dict:
     """

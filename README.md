@@ -65,7 +65,7 @@ make train-retriever
 
 ### 3. Ranker Training, Indexing, and Serving
 
-*Also see [Sequential Transformer Notebook](./docs/sequential_transformer.ipynb)*
+*See also [Sequential Transformer Notebook](./docs/sequential_transformer.ipynb), [Metaflow pipeline](./pipeline.py)*
 
 ```bash
 make post-train

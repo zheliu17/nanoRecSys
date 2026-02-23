@@ -30,6 +30,7 @@ all = [
     "ipykernel",
     "locust",
     "matplotlib",
+    "metaflow",
     "nbstripout",
     "onnxruntime",
     "onnxscript",

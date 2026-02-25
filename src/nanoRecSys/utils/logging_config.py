@@ -60,19 +60,20 @@ def setup_logger(
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setLevel(log_level)
 
-    # Metaflow automatically adds timestamps to stdout.
-    is_metaflow = "METAFLOW_RUN_ID" in os.environ
+    is_metaflow_run = False
+    try:
+        from metaflow import current  # pyright: ignore[reportPrivateImportUsage]
 
-    if is_metaflow:
-        fmt_string = "%(name)s - %(levelname)s - %(message)s"
+        is_metaflow_run = current.is_running_flow
+    except ImportError:
+        pass
+
+    if is_metaflow_run:
+        log_format = "[%(levelname)s] %(message)s"
     else:
-        fmt_string = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+        log_format = "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s"
 
-    # Formatter
-    formatter = logging.Formatter(
-        fmt_string,
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
+    formatter = logging.Formatter(log_format, datefmt="%Y-%m-%d %H:%M:%S")
     console_handler.setFormatter(formatter)
 
     logger.addHandler(console_handler)

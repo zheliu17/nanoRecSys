@@ -50,6 +50,8 @@ make install  # (Equivalent to pip install -e .[all])
 
 ### 2. Training & Artifact Generation [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/zheliu17/nanoRecSys/blob/main/docs/sequential_transformer.ipynb)
 
+*See also [Metaflow pipeline](./pipeline.py)*
+
 ```bash
 make data # Download and preprocess MovieLens-20M dataset
 ```
@@ -65,7 +67,7 @@ make train-retriever
 
 ### 3. Ranker Training, Indexing, and Serving
 
-*See also [Sequential Transformer Notebook](./docs/sequential_transformer.ipynb), [Metaflow pipeline](./pipeline.py)*
+*See also [Sequential Transformer Notebook](./docs/sequential_transformer.ipynb)*
 
 ```bash
 make post-train

@@ -60,14 +60,21 @@ def setup_logger(
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setLevel(log_level)
 
+    # Metaflow automatically adds timestamps to stdout.
+    is_metaflow = "METAFLOW_RUN_ID" in os.environ
+
+    if is_metaflow:
+        fmt_string = "%(name)s - %(levelname)s - %(message)s"
+    else:
+        fmt_string = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+
     # Formatter
     formatter = logging.Formatter(
-        "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        fmt_string,
         datefmt="%Y-%m-%d %H:%M:%S",
     )
     console_handler.setFormatter(formatter)
 
-    # Add console handler
     logger.addHandler(console_handler)
 
     # File handler (optional)

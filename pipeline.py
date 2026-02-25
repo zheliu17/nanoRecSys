@@ -16,14 +16,25 @@ from dotenv import load_dotenv
 from metaflow import environment  # pyright: ignore[reportAttributeAccessIssue]
 from metaflow.decorators import step
 from metaflow.flowspec import FlowSpec
+from metaflow.parameters import Parameter
 
 load_dotenv()
+
+BASE_URL = "https://huggingface.co/zheliu97/nanoRecSys/resolve/main/"
 
 
 class NanoRecSysPipeline(FlowSpec):
     """
     End-to-end Machine Learning Pipeline for nanoRecSys
     """
+
+    skip_retriever = Parameter(
+        "skip-retriever",
+        help="Skip retriever training and use existing/downloaded pretrained weights",
+        is_flag=True,  # type: ignore
+        default=False,
+        type=bool,
+    )
 
     @step
     def start(self):
@@ -53,21 +64,39 @@ class NanoRecSysPipeline(FlowSpec):
     @step
     def train_retriever(self):
         """Train the two-tower retriever model."""
-        print("Step 2: Training Retriever...")
-        import argparse
 
-        from nanoRecSys.train import main as train_main
+        if self.skip_retriever:
+            print("Skipping Retriever Training. Fetching/verifying existing weights...")
+            import os
+            import urllib.request
 
-        args = argparse.Namespace(
-            mode="retriever",
-            user_tower_type="transformer",
-            epochs=self.retriever_epochs,
-            batch_size=128,
-            lr=1e-3,
-            num_workers=4,
-            enable_progress_bar=False,
-        )
-        train_main(args)
+            from nanoRecSys.config import settings
+
+            for tower in ["item_tower.pth", "user_tower.pth"]:
+                filepath = settings.artifacts_dir / tower
+                if not os.path.exists(filepath):
+                    url = BASE_URL + tower
+                    print(f"Downloading {tower} from {url}...")
+                    urllib.request.urlretrieve(url, filepath)
+                else:
+                    print(f"Found existing {tower} at {filepath}")
+
+        else:
+            print("Step 2: Training Retriever...")
+            import argparse
+
+            from nanoRecSys.train import main as train_main
+
+            args = argparse.Namespace(
+                mode="retriever",
+                user_tower_type="transformer",
+                epochs=self.retriever_epochs,
+                batch_size=128,
+                lr=1e-3,
+                num_workers=4,
+                enable_progress_bar=False,
+            )
+            train_main(args)
 
         self.next(self.build_index)
 
@@ -151,3 +180,5 @@ class NanoRecSysPipeline(FlowSpec):
 if __name__ == "__main__":
     NanoRecSysPipeline()
     # python pipeline.py run
+    # To skip retriever training and use existing/downloaded weights:
+    # python pipeline.py run --skip-retriever

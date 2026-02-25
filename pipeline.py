@@ -25,7 +25,6 @@ class NanoRecSysPipeline(FlowSpec):
     End-to-end Machine Learning Pipeline for nanoRecSys
     """
 
-    @environment(vars={"TQDM_DISABLE": "1"})
     @step
     def start(self):
         """Initialize the pipeline."""
@@ -33,6 +32,7 @@ class NanoRecSysPipeline(FlowSpec):
         self.retriever_epochs = 300
         self.next(self.process_data)
 
+    @environment(vars={"TQDM_DISABLE": "1"})
     @step
     def process_data(self):
         """Run data processing and splitting."""
@@ -71,6 +71,7 @@ class NanoRecSysPipeline(FlowSpec):
 
         self.next(self.build_index)
 
+    @environment(vars={"TQDM_DISABLE": "1"})
     @step
     def build_index(self):
         """Build FAISS index and embeddings."""
@@ -87,6 +88,7 @@ class NanoRecSysPipeline(FlowSpec):
 
         self.next(self.mine_negatives)
 
+    @environment(vars={"TQDM_DISABLE": "1"})
     @step
     def mine_negatives(self):
         """Mine hard negatives using the trained retriever."""
@@ -127,6 +129,7 @@ class NanoRecSysPipeline(FlowSpec):
 
         self.next(self.export_onnx)
 
+    @environment(vars={"TQDM_DISABLE": "1"})
     @step
     def export_onnx(self):
         """Export trained models to ONNX."""

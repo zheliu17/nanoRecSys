@@ -133,6 +133,37 @@ class Settings(BaseSettings):
     item_embedding_lr: float = 1e-5
     user_embedding_lr: float = 0.0  # Effectively frozen if 0
 
+    # --- LLM Ranker ---
+    llm_model_name: str = "Qwen/Qwen2.5-1.5B-Instruct"
+    llm_max_seq_length: int = 2048  # Max sequence length for LLM input
+    llm_api_key: str = ""  # Set your API key here or via environment variable
+    llm_api_endpoint: str = (
+        "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
+    )
+    llm_api_model: str = "qwen3-max"
+    llm_history_len: int = (
+        10  # Number of past interactions to include in the LLM prompt
+    )
+    llm_min_history_len: int = 5  # Minimum length for LLM ranker training
+    llm_special_token: str = "<movie_emb>"
+    llm_lora_r: int = 16
+    llm_lora_alpha: int = 32
+    llm_lora_dropout: float = 0  # For unsloth QLoRA
+    llm_system_prompt_api: str = (
+        "You are a movie recommendation assistant. "
+        "You will be provided with a user's chronologically ordered movie viewing history as text titles, followed by a candidate movie title. "
+        "Answer Yes if you think the user will watch the candidate movie next, or No if you think they won't. "
+        "Respond with Yes or No only."
+    )
+    llm_system_prompt_local: str = (
+        "You are a movie recommendation assistant. "
+        "You will be provided with a user's chronologically ordered movie viewing history, followed by a candidate movie. "
+        "The inputs include multimodal embedding tokens representing the items. "
+        "Answer Yes if you think the user will watch the candidate movie next, or No if you think they won't. "
+        "Respond with Yes or No only."
+    )
+    llm_candidate_question: str = "Will the user watch this next?"
+
     # --- Embedding generation ---
     build_embeddings: bool = False
 
@@ -148,8 +179,11 @@ class Settings(BaseSettings):
             return None
         return v
 
+    model_config = SettingsConfigDict(
+        env_file=str(project_root / ".env"), env_file_encoding="utf-8"
+    )
 
-model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+
 settings: Settings = Settings()
 
 __all__ = ["Settings", "settings"]

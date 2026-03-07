@@ -34,6 +34,8 @@ from nanoRecSys.models.towers import ItemTower, TransformerUserTower
 from nanoRecSys.utils.logging_config import get_logger
 from nanoRecSys.utils.utils import collate_fn_numpy_to_tensor
 
+HEADER_SIZE = 4096  # Reserve 4KB for header (plenty for simple shapes)
+
 
 def update_npy_header(fp, shape, dtype, header_len):
     """
@@ -92,6 +94,10 @@ def process_split(
     device: str,
     n_items: int,
     suffix: str,
+    # Required for LLM Ranker
+    save_embeddings: bool = True,
+    # 0-indexed; Required for LLM Ranker training
+    save_history: bool = False,
 ):
     logger = get_logger()
     interactions_path = settings.processed_data_dir / f"{split}.parquet"
@@ -110,10 +116,11 @@ def process_split(
     # Accumulate metadata for DataFrames
     # Lists are fine for metadata (ints), but embeddings are written to disk
     result_user_embedding_idxs = []
-    # result_original_user_ids = []  # Optional, can be used for analysis but not needed for training
+    result_original_user_ids = []  # Added back for Analysis/LLM
     result_pos_items = []
     result_hard_negs = []
     result_random_negs = []
+    result_histories = []
 
     local_count = 0
     current_offset = global_offset
@@ -149,18 +156,30 @@ def process_split(
             valid_mask = next_items != 0
 
             # Filter Valid
-            # valid_indices = torch.nonzero(valid_mask, as_tuple=True)
+            valid_indices = torch.nonzero(valid_mask, as_tuple=True)
             flat_embs = current_embs[valid_mask]  # (N_valid, D)
             flat_targets = next_items[valid_mask]
             flat_targets_0indices = flat_targets - 1  # Convert to 0-based index
-            # flat_uids = batch_uids[valid_indices[0].cpu()]
+            flat_uids = batch_uids[valid_indices[0].cpu()]
 
             if flat_embs.shape[0] == 0:
                 continue
 
-            # Write Embeddings to Temp File immediately
-            flat_embs_cpu = flat_embs.cpu().numpy().astype(np.float32)
-            flat_embs_cpu.tofile(temp_emb_file)
+            if save_embeddings and temp_emb_file is not None:
+                # Write Embeddings to Temp File immediately
+                flat_embs_cpu = flat_embs.cpu().numpy().astype(np.float32)
+                flat_embs_cpu.tofile(temp_emb_file)
+
+            if save_history:
+                batch_seqs_cpu = batch_seqs.cpu().numpy()
+                b_idx = valid_indices[0].cpu().numpy()
+                p_idx = valid_indices[1].cpu().numpy()
+                for b, p in zip(b_idx, p_idx):
+                    hist = batch_seqs_cpu[b, : p + 1]
+                    # SASRec batches items as 1-indexed (0 is padding).
+                    # Shift them back to 0-indexed for the LLM!
+                    hist = [int(x) - 1 for x in hist if x != 0]
+                    result_histories.append(hist)
 
             # Update counts
             n_batch = flat_embs.shape[0]
@@ -217,7 +236,7 @@ def process_split(
 
             # Store Metadata
             result_user_embedding_idxs.extend(indices)
-            # result_original_user_ids.extend(flat_uids.cpu().numpy())
+            result_original_user_ids.extend(flat_uids.cpu().numpy())
             result_pos_items.extend(flat_targets_cpu)
             result_hard_negs.extend(batch_hard)
 
@@ -227,13 +246,16 @@ def process_split(
     # Interactions
     # Transformer is trained on (positive or all) next-item prediction
     # Pair with low ratings is not implemented
-    df_interactions = pd.DataFrame(
-        {
-            "user_idx": result_user_embedding_idxs,
-            "item_idx": result_pos_items,
-            "rating": 5.0,  # Dummy; This effectively treats all interactions as positive for the Ranker
-        }
-    )
+    interaction_dict = {
+        "user_idx": result_user_embedding_idxs,
+        "original_user_id": result_original_user_ids,
+        "item_idx": result_pos_items,
+        "rating": 5.0,  # Dummy; This effectively treats all interactions as positive for the Ranker
+    }
+    if save_history and len(result_histories) == len(result_pos_items):
+        interaction_dict["history_sequence"] = result_histories
+
+    df_interactions = pd.DataFrame(interaction_dict)
 
     if split == "val":
         df_interactions = df_interactions.sample(frac=1, random_state=42).reset_index(
@@ -273,6 +295,8 @@ def run_pipeline(
     num_random_negatives: int = 2,
     suffix: str = "sasrec_combined",
     sampling_ratio: float = 1.0,
+    save_embeddings: bool = True,
+    save_history: bool = False,
 ):
     logger = get_logger()
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -319,21 +343,22 @@ def run_pipeline(
     model.eval()
     model.to(device)
 
-    # 3. Open Final File Directly (Write Mode)
-    # We write a placeholder header first, then append data, then update header at the end.
-    final_npy_path = (
-        settings.sasrec_user_embs_npy_path / f"user_embeddings_{suffix}.npy"
-    )
-    HEADER_SIZE = 4096  # Reserve 4KB for header (plenty for simple shapes)
+    final_fp = None
+    if save_embeddings:
+        # 3. Open Final File Directly (Write Mode)
+        # We write a placeholder header first, then append data, then update header at the end.
+        final_npy_path = (
+            settings.sasrec_user_embs_npy_path / f"user_embeddings_{suffix}.npy"
+        )
 
-    logger.info(f"Opening final file {final_npy_path} for direct writing...")
-    try:
-        final_fp = open(final_npy_path, "wb")
-        # Write placeholder header (spaces)
-        final_fp.write(b" " * HEADER_SIZE)
-    except OSError as e:
-        logger.error(f"Could not open final file {final_npy_path}: {e}")
-        return
+        logger.info(f"Opening final file {final_npy_path} for direct writing...")
+        try:
+            final_fp = open(final_npy_path, "wb")
+            # Write placeholder header (spaces)
+            final_fp.write(b" " * HEADER_SIZE)
+        except OSError as e:
+            logger.error(f"Could not open final file {final_npy_path}: {e}")
+            return
 
     global_offset = 0
 
@@ -353,18 +378,21 @@ def run_pipeline(
             device=device,
             n_items=n_items,
             suffix=suffix,
+            save_embeddings=save_embeddings,
+            save_history=save_history,
         )
         global_offset += count
 
-    # 5. Finalize NPY Header
-    logger.info(f"Finalizing NPY file (Shape: {global_offset}x{embedding_dim})...")
-    update_npy_header(
-        final_fp,
-        shape=(global_offset, embedding_dim),
-        dtype=np.float32,
-        header_len=HEADER_SIZE,
-    )
-    final_fp.close()
+    if save_embeddings and final_fp is not None:
+        # 5. Finalize NPY Header
+        logger.info(f"Finalizing NPY file (Shape: {global_offset}x{embedding_dim})...")
+        update_npy_header(
+            final_fp,
+            shape=(global_offset, embedding_dim),
+            dtype=np.float32,
+            header_len=HEADER_SIZE,
+        )
+        final_fp.close()
 
     logger.info("Pipeline Complete. Artifacts ready for Ranker.")
 
@@ -375,6 +403,15 @@ if __name__ == "__main__":
     parser.add_argument("--top_k", type=int)
     parser.add_argument("--skip_top", type=int)
     parser.add_argument("--sampling_ratio", type=float, default=1.0)
+    parser.add_argument("--suffix", type=str, default="sasrec_combined")
+    parser.add_argument(
+        "--no_embeddings",
+        action="store_true",
+        help="Skip saving user embeddings to disk",
+    )
+    parser.add_argument(
+        "--save_history", action="store_true", help="Save interaction history"
+    )
     args = parser.parse_args()
 
     run_pipeline(
@@ -382,4 +419,7 @@ if __name__ == "__main__":
         top_k=args.top_k,
         skip_top=args.skip_top,
         sampling_ratio=args.sampling_ratio,
+        suffix=args.suffix,
+        save_embeddings=not args.no_embeddings,
+        save_history=args.save_history,
     )

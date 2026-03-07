@@ -30,13 +30,24 @@ all = [
     "ipykernel",
     "locust",
     "matplotlib",
-    "metaflow",
+    "metaflow; sys_platform != 'win32'",
     "nbstripout",
     "onnxruntime",
     "onnxscript",
     "redis",
     "streamlit",
     "uvicorn",
+]
+
+llm = [
+    "accelerate",
+    "bitsandbytes",
+    "peft",
+    "transformers",
+    "trl",
+    "unsloth",
+    "xformers",
+    "ipywidgets",
 ]
 
 [build-system]

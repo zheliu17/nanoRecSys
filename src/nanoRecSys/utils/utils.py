@@ -299,3 +299,39 @@ def collate_fn_with_embeddings(
         result.append(torch.from_numpy(weights).float())
 
     return tuple(result)
+
+
+def format_results_to_dataframe(
+    results: dict[str, float], k_list: list[int] = [10, 20, 50, 100]
+) -> pd.DataFrame:
+    """
+    Convert a flat metrics dictionary to a formatted DataFrame.
+
+    Args:
+        results: Dict with keys like "Recall@10", "Prefix_Recall@10", etc.
+        k_list: List of K values used (default: [10, 20, 50, 100])
+
+    Returns:
+        DataFrame with K values as index and metric names as columns.
+    """
+    df = pd.DataFrame(index=k_list)
+    data_map = {}
+
+    for k, v in results.items():
+        if "@" not in k:
+            continue
+        parts = k.split("@")
+        val_k = int(parts[1])
+        name_parts = parts[0].split("_")
+        metric = name_parts[-1]
+        prefix = "_".join(
+            name_parts[:-1]
+        )  # "Ranker", "Retrieval", "TwoTowerRetriever", etc.
+
+        col_name = f"{prefix}_{metric}" if prefix else metric
+        if col_name not in data_map:
+            data_map[col_name] = {}
+        data_map[col_name][val_k] = v
+
+    df = pd.DataFrame(data_map).sort_index()
+    return df

@@ -18,7 +18,7 @@ from metaflow.decorators import step
 from metaflow.flowspec import FlowSpec
 from metaflow.parameters import Parameter
 
-load_dotenv()
+load_dotenv()  # for arbitrary env vars
 
 BASE_URL = "https://huggingface.co/zheliu97/nanoRecSys/resolve/main/"
 
@@ -83,11 +83,10 @@ class NanoRecSysPipeline(FlowSpec):
 
         else:
             print("Step 2: Training Retriever...")
-            import argparse
 
-            from nanoRecSys.train import main as train_main
+            from nanoRecSys.train import TrainingConfig, main as train_main
 
-            args = argparse.Namespace(
+            config = TrainingConfig(
                 mode="retriever",
                 user_tower_type="transformer",
                 epochs=self.retriever_epochs,
@@ -96,7 +95,7 @@ class NanoRecSysPipeline(FlowSpec):
                 num_workers=4,
                 enable_progress_bar=False,
             )
-            train_main(args)
+            train_main(config)
 
         self.next(self.build_index)
 
@@ -137,11 +136,10 @@ class NanoRecSysPipeline(FlowSpec):
     def train_ranker(self):
         """Train the ranking model."""
         print("Step 5: Training Ranker...")
-        import argparse
 
-        from nanoRecSys.train import main as train_main
+        from nanoRecSys.train import TrainingConfig, main as train_main
 
-        args = argparse.Namespace(
+        config = TrainingConfig(
             mode="ranker",
             user_tower_type="transformer",
             epochs=5,
@@ -154,7 +152,7 @@ class NanoRecSysPipeline(FlowSpec):
             check_val_every_n_epoch=1,
             enable_progress_bar=False,
         )
-        train_main(args)
+        train_main(config)
 
         self.next(self.export_onnx)
 

@@ -26,6 +26,7 @@ from nanoRecSys.models.ranker import MLPRanker
 from nanoRecSys.utils.logging_config import get_logger
 from nanoRecSys.utils.utils import (
     compute_item_probabilities,
+    format_results_to_dataframe,
     get_vocab_sizes,
     load_all_positives,
 )
@@ -842,26 +843,8 @@ class OfflineEvaluator:
         return {k: v / len(self.test_users) for k, v in metrics_sum.items()}
 
     def formatted_results(self, results):
-        """Format results"""
-        df = pd.DataFrame(index=self.k_list)
-        data_map = {}
-
-        for k, v in results.items():
-            if "@" not in k:
-                continue
-            parts = k.split("@")
-            val_k = int(parts[1])
-            name_parts = parts[0].split("_")
-            metric = name_parts[-1]
-            prefix = "_".join(name_parts[:-1])  # "Ranker", "Retrieval", or ""
-
-            col_name = f"{prefix}_{metric}" if prefix else metric
-            if col_name not in data_map:
-                data_map[col_name] = {}
-            data_map[col_name][val_k] = v
-
-        df = pd.DataFrame(data_map).sort_index()
-        return df
+        """Format results to DataFrame using the shared utility function."""
+        return format_results_to_dataframe(results, self.k_list)
 
 
 if __name__ == "__main__":

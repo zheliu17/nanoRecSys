@@ -24,9 +24,7 @@ from nanoRecSys.models.towers import Tower
 from nanoRecSys.utils.utils import compute_item_probabilities
 
 
-# -------------------------------------------------------------------
 # 1. Tower Tests
-# -------------------------------------------------------------------
 class TestTower:
     def test_tower_output_shape_and_norm(self):
         BATCH_SIZE = 4
@@ -55,9 +53,7 @@ class TestTower:
         assert torch.allclose(norms, torch.ones_like(norms), atol=1e-5)
 
 
-# -------------------------------------------------------------------
 # 2. Loss Tests
-# -------------------------------------------------------------------
 class TestLosses:
     def test_infonce_loss_forward(self):
         BATCH_SIZE = 4
@@ -94,9 +90,7 @@ class TestLosses:
         assert loss > 0
 
 
-# -------------------------------------------------------------------
 # 3. Ranker Tests
-# -------------------------------------------------------------------
 class TestRanker:
     def test_ranker_forward_shape(self):
         BATCH_SIZE = 5
@@ -132,9 +126,7 @@ class TestRanker:
         assert output.shape == (BATCH_SIZE,)
 
 
-# -------------------------------------------------------------------
 # 4. Utils Tests
-# -------------------------------------------------------------------
 class TestUtils:
     @patch("nanoRecSys.utils.utils.pd.read_parquet")
     @patch("nanoRecSys.utils.utils.settings")

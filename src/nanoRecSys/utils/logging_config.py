@@ -62,7 +62,7 @@ def setup_logger(
 
     is_metaflow_run = False
     try:
-        from metaflow import current  # pyright: ignore[reportPrivateImportUsage]
+        from metaflow import current  # pyright: ignore[reportMissingImports, reportPrivateImportUsage]
 
         is_metaflow_run = current.is_running_flow
     except ImportError:
@@ -71,9 +71,9 @@ def setup_logger(
     if is_metaflow_run:
         log_format = "[%(levelname)s] %(message)s"
     else:
-        log_format = "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s"
+        log_format = "%(asctime)s | %(levelname)s | %(name)s | %(message)s"
 
-    formatter = logging.Formatter(log_format, datefmt="%Y-%m-%d %H:%M:%S")
+    formatter = logging.Formatter(log_format, datefmt="%b %d %H:%M")
     console_handler.setFormatter(formatter)
 
     logger.addHandler(console_handler)

@@ -14,3 +14,5 @@ data/*
 !data/.gitkeep
 artifacts/*
 !artifacts/.gitkeep
+huggingface_tokenizers_cache
+unsloth_compiled_cache

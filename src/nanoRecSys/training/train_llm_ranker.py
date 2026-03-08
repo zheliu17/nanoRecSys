@@ -49,6 +49,9 @@ class LLMTrainingConfig:
     epochs: int = 1
     save_steps: int | None = 500
     resume_from_checkpoint: str | bool | None = None
+    projection_path: str | None = (
+        None  # Optional path to pre-trained projection weights
+    )
     report_to: str = "none"
     optim: str = "paged_adamw_32bit"
     positive_sample_ratio: float = 1.0
@@ -112,9 +115,17 @@ def build_dataset(
 
     system_prompt = settings.llm_system_prompt_local
 
-    for idx, row in int_df.iterrows():
+    # Pre-build {movieId: title} dict once to avoid repeated set_index inside the loop
+    movie_mapping = movies_df.set_index("movieId")["title"].to_dict()
+
+    # Converting to dictionaries avoids slow pandas .iloc and iterrows lookups
+    int_records = int_df.to_dict("records")
+    hard_records = hard_df.to_dict("records")
+    rand_records = rand_df.to_dict("records")
+
+    for row, hard_row, rand_row in zip(int_records, hard_records, rand_records):
         pos_item = int(row["item_idx"])
-        hard_neg = int(hard_df.iloc[idx]["neg_item_idx"])
+        hard_neg = int(hard_row["neg_item_idx"])
 
         if (
             "history_sequence" not in row
@@ -128,14 +139,14 @@ def build_dataset(
         history_ids = history_ids[-settings.llm_history_len :]
 
         history_str, valid_history_ids = build_history_string(
-            history_ids, item_map, movies_df
+            history_ids, item_map, movie_mapping
         )
         if history_str is None:
             continue
 
         # Positive
         result, valid_cand_pos = build_sft_example_for_candidate(
-            history_str, pos_item, item_map, movies_df, system_prompt, "Yes"
+            history_str, pos_item, item_map, movie_mapping, system_prompt, "Yes"
         )
         if valid_cand_pos is not None and np.random.rand() < positive_sample_ratio:
             texts.append(result[0])
@@ -146,7 +157,7 @@ def build_dataset(
 
         # Hard Negative
         result, valid_cand_hard = build_sft_example_for_candidate(
-            history_str, hard_neg, item_map, movies_df, system_prompt, "No"
+            history_str, hard_neg, item_map, movie_mapping, system_prompt, "No"
         )
         if valid_cand_hard is not None:
             texts.append(result[0])
@@ -160,12 +171,12 @@ def build_dataset(
             # Load all pre-mined random negatives to prevent false negatives
             # Columns are named neg_item_idx_1, neg_item_idx_2, etc.
             rand_cols = [
-                col for col in rand_df.columns if col.startswith("neg_item_idx_")
+                col for col in rand_row.keys() if col.startswith("neg_item_idx_")
             ]
             for rand_col in rand_cols:
-                rand_neg = int(rand_df.iloc[idx][rand_col])
+                rand_neg = int(rand_row[rand_col])
                 result, valid_cand_rand = build_sft_example_for_candidate(
-                    history_str, rand_neg, item_map, movies_df, system_prompt, "No"
+                    history_str, rand_neg, item_map, movie_mapping, system_prompt, "No"
                 )
                 if valid_cand_rand is not None:
                     texts.append(result[0])
@@ -245,7 +256,7 @@ class MultimodalDataCollator(DataCollatorForLanguageModeling):
             )
 
         # The TRL collator will automatically use `completion_mask` (created in tokenize_fn) -> `labels`
-        batch = super().__call__(cleansed_examples)
+        batch = super().torch_call(cleansed_examples)
 
         # Add item embeddings back to batch
         batch["sasrec_embs"] = self.item_embeddings[item_targets_tensor]
@@ -254,20 +265,11 @@ class MultimodalDataCollator(DataCollatorForLanguageModeling):
 
 class CustomSFTTrainer(SFTTrainer):
     def save_model(self, output_dir=None, _internal_call=False):
+        """Override to use LLMRanker's custom checkpoint saving."""
         if output_dir is None:
             output_dir = self.args.output_dir
 
         self.model.save_checkpoint(output_dir)
-
-    def _save_checkpoint(self, model, trial, *args, **kwargs):
-        # Let the standard trainer save optimizer, scheduler, etc.
-        super()._save_checkpoint(model, trial, *args, **kwargs)
-
-        # Save model weights using LLMRanker's method
-        checkpoint_folder = (
-            f"{self.args.output_dir}/checkpoint-{self.state.global_step}"
-        )
-        self.model.save_checkpoint(checkpoint_folder)
 
     def _load_from_checkpoint(self, resume_from_checkpoint, model=None):
         logger = get_logger()
@@ -305,6 +307,7 @@ class CustomSFTTrainer(SFTTrainer):
                 logger.info(
                     "Stage 1 -> Stage 2 transition detected. Restarting optimizer/scheduler."
                 )
+                logger.warning("Not recommended; Consider using projection_path.")
                 return
         super()._load_optimizer_and_scheduler(checkpoint)
 
@@ -333,6 +336,10 @@ def main(config: LLMTrainingConfig | None = None):
         model_name=config.model_name,
         use_lora=config.use_lora,
     )
+    if config.projection_path is not None:
+        state_dict = torch.load(config.projection_path, map_location=model.device)
+        model.projection.load_state_dict(state_dict, strict=True)
+
     tokenizer = model.tokenizer
 
     model.print_trainable_parameters()
@@ -391,7 +398,7 @@ def main(config: LLMTrainingConfig | None = None):
         tokenizer=tokenizer,
     )
 
-    output_dir = str(settings.artifacts_dir / "llm_ranker_lora")
+    output_dir = str(settings.llm_output_dir)
 
     training_args = SFTConfig(
         output_dir=output_dir,
@@ -401,7 +408,7 @@ def main(config: LLMTrainingConfig | None = None):
         warmup_steps=config.warmup_steps,
         num_train_epochs=config.epochs,
         logging_steps=10,
-        save_strategy="epoch",
+        save_strategy="steps",
         save_steps=config.save_steps,
         optim=config.optim,
         fp16=not is_bfloat16_supported(),
@@ -449,6 +456,7 @@ if __name__ == "__main__":
     parser.add_argument("--epochs", type=int)
     parser.add_argument("--save_steps", type=int)
     parser.add_argument("--resume_from_checkpoint", type=str)
+    parser.add_argument("--projection_path", type=str)
     parser.add_argument("--report_to", type=str)
     parser.add_argument("--optim", type=str)
     parser.add_argument("--positive_sample_ratio", type=float)

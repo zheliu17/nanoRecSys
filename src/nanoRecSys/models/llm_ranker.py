@@ -167,60 +167,29 @@ class LLMRanker(nn.Module):
     def print_trainable_parameters(self):
         """Prints the number of trainable parameters in the model."""
         logger = get_logger()
-
-        if self.use_lora:
-            # Use PEFT's built-in count as baseline, then we manually log our projection
-            peft_trainable_params, peft_all_param = (
-                self.llm.get_nb_trainable_parameters()
-            )
-        else:
-            # When not using LoRA, all LLM parameters are frozen
-            peft_trainable_params = 0
-
-            # For 4-bit quantized models, numel() doesn't reflect actual parameter count
-            # Calculate from model config for accurate count
-            try:
-                config = self.llm.config
-                hidden_size = config.hidden_size
-                vocab_size = config.vocab_size
-                num_layers = config.num_hidden_layers
-                intermediate_size = getattr(
-                    config, "intermediate_size", hidden_size * 4
-                )
-
-                # Calculate parameters: embeddings + attention + feed-forward per layer + output head
-                peft_all_param = (
-                    vocab_size * hidden_size  # token embeddings
-                    + config.max_position_embeddings * hidden_size
-                    if hasattr(config, "max_position_embeddings")
-                    else 0  # position embeddings
-                    + num_layers
-                    * (
-                        4
-                        * hidden_size
-                        * hidden_size  # Q,K,V,O projections in attention
-                        + 2
-                        * hidden_size
-                        * intermediate_size  # up_proj and down_proj in FFN
-                        + 3 * hidden_size  # layer norms
-                    )
-                    + vocab_size * hidden_size  # output projection
-                )
-            except Exception:
-                # Fallback if config parsing fails
-                peft_all_param = sum(p.numel() for p in self.llm.parameters())
-
+        # Projection trainable params (always accurate)
         proj_trainable = sum(
             p.numel() for p in self.projection.parameters() if p.requires_grad
         )
-        proj_all = sum(p.numel() for p in self.projection.parameters())
 
-        total_trainable = peft_trainable_params + proj_trainable
-        total_all = peft_all_param + proj_all
+        if self.use_lora:
+            # Use PEFT's built-in count as baseline, then include projection totals
+            peft_trainable_params, peft_all_param = (
+                self.llm.get_nb_trainable_parameters()
+            )
+            proj_all = sum(p.numel() for p in self.projection.parameters())
 
-        logger.info(
-            f"trainable params: {total_trainable:,d} || all params: {total_all:,d} || trainable%: {100 * total_trainable / total_all:.4f}"
-        )
+            total_trainable = peft_trainable_params + proj_trainable
+            total_all = peft_all_param + proj_all
+
+            logger.info(
+                f"trainable params: {total_trainable:,d} || all params: {total_all:,d} || trainable%: {100 * total_trainable / total_all:.4f}"
+            )
+        else:
+            # TODO: Revisit and implement accurate total parameter counting for
+            # 4-bit quantized models if/when needed.
+            total_trainable = proj_trainable
+            logger.info(f"trainable params: {total_trainable:,d}")
 
     def get_input_embeddings(self):
         return self.llm.get_input_embeddings()

@@ -302,14 +302,14 @@ def collate_fn_with_embeddings(
 
 
 def format_results_to_dataframe(
-    results: dict[str, float], k_list: list[int] = [10, 20, 50, 100]
+    results: dict[str, float], k_list: list[int] = settings.evaluation_k_list
 ) -> pd.DataFrame:
     """
     Convert a flat metrics dictionary to a formatted DataFrame.
 
     Args:
         results: Dict with keys like "Recall@10", "Prefix_Recall@10", etc.
-        k_list: List of K values used (default: [10, 20, 50, 100])
+        k_list: List of K values used
 
     Returns:
         DataFrame with K values as index and metric names as columns.

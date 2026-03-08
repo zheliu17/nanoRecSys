@@ -32,9 +32,9 @@ from nanoRecSys.utils.prompt_utils import (
 class MinimalRunnerMock:
     """Mock to satisfy LocalLLMScorer's data requirements without loading Faiss, metrics, full evaluator, etc."""
 
-    def __init__(self, item_map, movies_df, device, item_embs):
+    def __init__(self, item_map, movie_mapping, device, item_embs):
         self.item_map = item_map
-        self.movies_df = movies_df
+        self.movie_mapping = movie_mapping
 
         class MockEvaluator:
             pass
@@ -98,6 +98,7 @@ def main():
         .drop_duplicates("movieId")
         .set_index("movieId")
     )
+    movie_mapping = movies_df["title"].to_dict()
 
     seq_user_ids = np.load(settings.processed_data_dir / "seq_test_user_ids.npy")
     try:
@@ -149,7 +150,7 @@ def main():
         np.load(settings.artifacts_dir / "item_embeddings.npy"), dtype=torch.float32
     )
 
-    runner_mock = MinimalRunnerMock(item_map_arr, movies_df, device, item_embs)
+    runner_mock = MinimalRunnerMock(item_map_arr, movie_mapping, device, item_embs)
     scorer = LocalLLMScorer(adapter_path=args.adapter_path, use_lora=args.use_lora)
     scorer.setup(runner_mock)  # type: ignore
 
@@ -160,7 +161,7 @@ def main():
     prefix_encoded, valid_history_ids = prepare_prompt_prefix(
         history_ids_eval,
         runner_mock.item_map,
-        runner_mock.movies_df,
+        runner_mock.movie_mapping,
         scorer.tokenizer,
         settings.llm_system_prompt_local,
         scorer.device,
@@ -188,7 +189,7 @@ def main():
         is_pos = idx == 0
         label = "POSITIVE" if is_pos else "NEGATIVE"
         titles, _ = decode_ids_to_titles_and_keep_ids(
-            [cid], runner_mock.item_map, runner_mock.movies_df
+            [cid], runner_mock.item_map, runner_mock.movie_mapping
         )
         cand_title = titles[0] if titles else str(cid)
 
@@ -260,7 +261,7 @@ def main():
         is_pos = idx == 0
         label = "POS" if is_pos else "NEG"
         titles, _ = decode_ids_to_titles_and_keep_ids(
-            [cid], runner_mock.item_map, runner_mock.movies_df
+            [cid], runner_mock.item_map, runner_mock.movie_mapping
         )
         cand_title = titles[0] if titles else str(cid)
         score = score_map.get(cid, -999.0)

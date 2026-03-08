@@ -75,15 +75,16 @@ class LLMEvalRunner:
         self.num_users = num_users
 
         self.movies_df: pd.DataFrame = pd.read_csv(settings.raw_data_dir / "movies.csv")
+        self.movie_mapping: dict = self.movies_df.set_index("movieId")[
+            "title"
+        ].to_dict()
         self.item_map: np.ndarray = np.load(
             settings.processed_data_dir / "item_map.npy"
         )
         self._load_seq_dict()
 
         self.logger.info("Initialising OfflineEvaluator + two-tower embeddings…")
-        self.evaluator = OfflineEvaluator(
-            batch_size=1024, k_list=[10, 20, 50, 100], remove_history=True
-        )
+        self.evaluator = OfflineEvaluator(batch_size=1024, remove_history=True)
         self.evaluator._load_embeddings()
         self.evaluator._load_transformer_user_tower()
 
@@ -118,9 +119,7 @@ class LLMEvalRunner:
         _, topk_idx = torch.topk(scores, k=self.K_CANDS, dim=1)
         return topk_idx[0].cpu().tolist()
 
-    def run(
-        self, scorers: list[Scorer], verbose: bool = True
-    ) -> dict[str, dict[str, float]]:
+    def run(self, scorers: list[Scorer]) -> dict[str, dict[str, float]]:
         """Evaluate a list of *scorers* over :attr:`num_users` test users.
 
         Returns:
@@ -182,10 +181,6 @@ class LLMEvalRunner:
         for scorer in scorers:
             final = {k: v / processed for k, v in metrics_sum[scorer.name].items()}
             final_metrics[scorer.name] = final
-            if verbose:
-                self.logger.info(f"[{scorer.name}] Metrics over {processed} users:")
-                for k, v in final.items():
-                    self.logger.info(f"  {k}: {v:.4f}")
 
         return final_metrics
 
@@ -243,18 +238,21 @@ class APIScorer:
 
     def setup(self, runner: LLMEvalRunner) -> None:
         self.item_map = runner.item_map
-        self.movies_df = runner.movies_df
+        self.movie_mapping = runner.movie_mapping
 
     def _titles(self, ids: list[int]) -> list[str]:
         titles, _ = decode_ids_to_titles_and_keep_ids(
-            ids, self.item_map, self.movies_df
+            ids, self.item_map, self.movie_mapping
         )
         return titles
 
     def _api_call(
         self, system_prompt: str, user_prompt: str, max_retries: int = 3
-    ) -> float:
-        """Return the log-prob of token ``Yes``, or ``-999.0`` on failure."""
+    ) -> tuple[float, bool]:
+        """Return (score, success) where success indicates status_code == 200.
+
+        Returns score of ``-999.0`` on any failure. Only cache when success is True.
+        """
         logger = get_logger()
         data = {
             "model": settings.llm_api_model,
@@ -267,10 +265,16 @@ class APIScorer:
             "max_tokens": 1,
             "temperature": 0.0,
         }
+        # Only include the explicit `enable_thinking` key when it's disabled
+        # in settings. This avoids sending the key when it's enabled/default.
+        if settings.llm_enable_thinking is not None:
+            data["enable_thinking"] = settings.llm_enable_thinking
         for attempt in range(max_retries):
             try:
                 resp = self.session.post(
-                    settings.llm_api_endpoint, json=data, timeout=10
+                    settings.llm_api_endpoint,
+                    json=data,
+                    timeout=settings.llm_api_timeout,
                 )
                 if resp.status_code == 200:
                     try:
@@ -279,26 +283,33 @@ class APIScorer:
                         ]
                     except Exception as e:
                         logger.info(f"API response parsing failed: {e}")
-                        return -999.0
+                        return (-999.0, True)
 
-                    yes_prob = -999.0
-                    no_prob = -999.0
+                    yes_probs = []
+                    no_probs = []
                     for lp in top_lps:
                         clean = re.sub(r"[^A-Za-z0-9]", "", lp.get("token", "")).lower()
                         if clean == "yes":
-                            yes_prob = float(lp.get("logprob", -999.0))
+                            yes_probs.append(float(lp.get("logprob", -999.0)))
                         elif clean == "no":
-                            no_prob = float(lp.get("logprob", -999.0))
+                            no_probs.append(float(lp.get("logprob", -999.0)))
+
+                    yes_prob = (
+                        float(np.logaddexp.reduce(yes_probs)) if yes_probs else -999.0
+                    )
+                    no_prob = (
+                        float(np.logaddexp.reduce(no_probs)) if no_probs else -999.0
+                    )
 
                     if yes_prob != -999.0 and no_prob != -999.0:
-                        return yes_prob - no_prob
+                        return (yes_prob - no_prob, True)
                     elif yes_prob != -999.0:
-                        return yes_prob
+                        return (yes_prob, True)
 
                     logger.info(
                         "API call succeeded but 'Yes' token not found in top_logprobs"
                     )
-                    return -999.0
+                    return (-999.0, True)
 
                 if resp.status_code == 429:
                     # rate limited, retry after backoff
@@ -309,12 +320,12 @@ class APIScorer:
                 logger.info(
                     f"API call failed: status={resp.status_code} body={resp.text[:200]}"
                 )
-                return -999.0
+                return (-999.0, False)
             except Exception as e:
                 logger.info(f"API call exception: {e}")
                 time.sleep(2**attempt)
         logger.info("API call failed after retries")
-        return -999.0
+        return (-999.0, False)
 
     def score(
         self, u_idx: int, history_ids: list[int], candidates: list[int]
@@ -335,10 +346,11 @@ class APIScorer:
                 f"User Viewing History:\n{history_str}\n\n"
                 f"Candidate Movie: {cand_title}\n\nWill the user watch this next?"
             )
-            score = self._api_call(settings.llm_system_prompt_api, user_prompt)
-            self.cache[key] = score
-            with open(self.cache_path, "w") as f:
-                json.dump(self.cache, f)
+            score, got_200 = self._api_call(settings.llm_system_prompt_api, user_prompt)
+            if got_200:
+                self.cache[key] = score
+                with open(self.cache_path, "w") as f:
+                    json.dump(self.cache, f)
             results.append((cid, score))
 
         return results
@@ -361,9 +373,7 @@ class LocalLLMScorer:
         use_lora: bool = True,
     ) -> None:
         self.model_name = model_name
-        self.adapter_path = adapter_path or os.path.join(
-            settings.artifacts_dir, "llm_ranker_lora"
-        )
+        self.adapter_path = adapter_path or str(settings.llm_output_dir)
         self.batch_size = max(1, int(batch_size))
         self.use_lora = use_lora
 
@@ -372,7 +382,7 @@ class LocalLLMScorer:
 
         logger = get_logger()
         self.item_map = runner.item_map
-        self.movies_df = runner.movies_df
+        self.movie_mapping = runner.movie_mapping
         self.device = runner.evaluator.device
         self.item_embs = runner.evaluator.item_embs.to(self.device)
 
@@ -489,7 +499,7 @@ class LocalLLMScorer:
         prefix_encoded, valid_history_ids = prepare_prompt_prefix(
             history_ids,
             self.item_map,
-            self.movies_df,
+            self.movie_mapping,
             self.tokenizer,
             settings.llm_system_prompt_local,
             self.device,
@@ -500,7 +510,7 @@ class LocalLLMScorer:
         prefix_embeds = self._build_prefix_embeds(prefix_encoded, valid_history_ids)
 
         all_titles, valid_cands = decode_ids_to_titles_and_keep_ids(
-            candidates, self.item_map, self.movies_df
+            candidates, self.item_map, self.movie_mapping
         )
         title_map = dict(zip(valid_cands, all_titles))
 
@@ -527,8 +537,8 @@ def _build_args() -> argparse.Namespace:
     )
     p.add_argument(
         "--method",
-        choices=["api", "local", "both"],
-        help="Which ranker(s) to evaluate (api/local/both).",
+        choices=["api", "local", "both", "retriever"],
+        help="Which ranker(s) to evaluate (api/local/both/retriever).",
     )
     p.add_argument("--num_users", type=int, help="Number of test users to evaluate.")
     # API-scorer options
@@ -546,7 +556,7 @@ def _build_args() -> argparse.Namespace:
     p.add_argument(
         "--adapter_path",
         type=str,
-        help="Path to the LoRA adapter directory (default: artifacts/llm_ranker_lora).",
+        help="Path to the LoRA adapter directory.",
     )
     p.add_argument(
         "--local_batch_size",
@@ -584,10 +594,10 @@ def evaluate(
     adapter_path: str | None = None,
     local_batch_size: int = 8,
     use_lora: bool = True,
-    verbose: bool = False,
 ) -> dict[str, float]:
     runner = LLMEvalRunner(num_users=num_users)
 
+    # retriever is always included as a baseline
     scorers: list[Scorer] = [RetrieverScorer()]
     if method in ("api", "both"):
         scorers.append(APIScorer(clean_cache=clean_cache))
@@ -601,7 +611,7 @@ def evaluate(
             )
         )
 
-    all_metrics = runner.run(scorers, verbose=verbose)
+    all_metrics = runner.run(scorers)
 
     return format_llm_results(all_metrics)
 
@@ -623,11 +633,11 @@ def main() -> dict[str, float]:
     # clean_cache is a boolean flag; include it explicitly
     call_args["clean_cache"] = args.clean_cache
 
-    all_metrics = evaluate(**call_args, verbose=True)
+    all_metrics = evaluate(**call_args)
 
     # Format results to DataFrame for display (same as offline_eval)
     print("\n--- LLM Ranker Evaluation Results ---")
-    df = format_results_to_dataframe(all_metrics, k_list=[10, 20, 50, 100])
+    df = format_results_to_dataframe(all_metrics, k_list=settings.evaluation_k_list)
 
     # Print all columns, 4 at a time
     n_cols = df.shape[1]

@@ -36,7 +36,7 @@ class OfflineEvaluator:
     def __init__(
         self,
         batch_size=256,
-        k_list=[10, 20, 50, 100],
+        k_list=settings.evaluation_k_list,
         sampled=False,
         sample_strategy="uniform",
         remove_history=True,

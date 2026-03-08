@@ -16,7 +16,6 @@
 """Shared prompt formatting utilities for LLM ranker training and evaluation."""
 
 import numpy as np
-import pandas as pd
 
 from nanoRecSys.config import settings
 
@@ -24,15 +23,15 @@ from nanoRecSys.config import settings
 def decode_ids_to_titles_and_keep_ids(
     item_ids: list,
     item_map: np.ndarray,
-    movies_df: pd.DataFrame,
+    movie_mapping: dict,
 ) -> tuple:
     """
     Resolve internal item indices to movie titles, skipping unknowns.
 
     Args:
         item_ids: Internal item indices
-        item_map: Array mapping internal index → original movieId
-        movies_df: DataFrame with ``movieId`` and ``title`` columns
+        item_map: Array mapping internal index -> original movieId
+        movie_mapping: Pre-built ``{movieId: title}`` dict.
 
     Returns:
         Tuple of (titles, valid_ids) — parallel lists with only resolvable items.
@@ -42,25 +41,21 @@ def decode_ids_to_titles_and_keep_ids(
 
     # We don't filter anything; item_map is usually 0-indexed
     original_ids = item_map[item_ids]
-
-    if "movieId" in movies_df.columns:
-        mapping = movies_df.set_index("movieId")["title"]
-    else:
-        mapping = movies_df["title"]
-
-    titles_series = pd.Series(original_ids).map(mapping)
-    valid_mask = titles_series.notna()
-
-    titles = titles_series[valid_mask].tolist()
-    valid_ids = np.array(item_ids)[valid_mask].tolist()
-
-    return titles, valid_ids
+    pairs = [
+        (movie_mapping[mid], iid)
+        for mid, iid in zip(original_ids, item_ids)
+        if mid in movie_mapping
+    ]
+    if not pairs:
+        return [], []
+    titles, valid_ids = zip(*pairs)
+    return list(titles), list(valid_ids)
 
 
 def build_history_string(
     history_ids: list,
     item_map: np.ndarray,
-    movies_df: pd.DataFrame,
+    movie_mapping: dict,
     special_token: str = settings.llm_special_token,
 ) -> tuple:
     """
@@ -70,17 +65,26 @@ def build_history_string(
         Tuple of (history_string, valid_history_ids) or (None, None) if empty.
     """
     history_titles, valid_history_ids = decode_ids_to_titles_and_keep_ids(
-        history_ids, item_map, movies_df
+        history_ids, item_map, movie_mapping
     )
 
     if not valid_history_ids:
         return None, None
 
-    # title first, then special token
-    # https://arxiv.org/abs/2312.02445
-    history_str = "\n".join(
-        [f"{i + 1}. {title} {special_token}" for i, title in enumerate(history_titles)]
-    )
+    if settings.llm_causal_prefixing:
+        history_str = "\n".join(
+            [
+                f"{i + 1}. {special_token} {title}"
+                for i, title in enumerate(history_titles)
+            ]
+        )
+    else:
+        history_str = "\n".join(
+            [
+                f"{i + 1}. {title} {special_token}"
+                for i, title in enumerate(history_titles)
+            ]
+        )
     return history_str, valid_history_ids
 
 
@@ -88,7 +92,10 @@ def build_candidate_block(
     cand_title: str,
     special_token: str = settings.llm_special_token,
 ) -> str:
-    return f"{cand_title} {special_token}\n\n{settings.llm_candidate_question}"
+    if settings.llm_causal_prefixing:
+        return f"{special_token} {cand_title}\n\n{settings.llm_candidate_question}"
+    else:
+        return f"{cand_title} {special_token}\n\n{settings.llm_candidate_question}"
 
 
 def build_prefix_text(
@@ -112,14 +119,14 @@ def build_sft_example_for_candidate(
     history_str: str,
     cand_id: int,
     item_map: np.ndarray,
-    movies_df: pd.DataFrame,
+    movie_mapping: dict,
     system_prompt: str,
     assistant_response: str,
     special_token: str = settings.llm_special_token,
 ) -> tuple:
     """Build a complete ChatML SFT training example from the shared prefix + suffix structure."""
     cand_titles, valid_cands = decode_ids_to_titles_and_keep_ids(
-        [cand_id], item_map, movies_df
+        [cand_id], item_map, movie_mapping
     )
     if not valid_cands:
         return None, None
@@ -142,7 +149,7 @@ def build_candidate_suffix(
 def prepare_prompt_prefix(
     history_ids: list,
     item_map: np.ndarray,
-    movies_df: pd.DataFrame,
+    movie_mapping: dict,
     tokenizer,
     system_prompt: str,
     device,
@@ -158,7 +165,7 @@ def prepare_prompt_prefix(
         Tuple of (prefix_encoded, valid_history_ids) or (None, None) if no valid items.
     """
     history_str, valid_history_ids = build_history_string(
-        history_ids, item_map, movies_df, special_token
+        history_ids, item_map, movie_mapping, special_token
     )
 
     if history_str is None:

@@ -49,6 +49,8 @@ class Settings(BaseSettings):
     evaluation_positive_threshold: float = (
         0  # Rating >= this is positive during evaluation
     )
+    # K values for evaluation metrics like Recall@K
+    evaluation_k_list: list[int] = [10, 20, 50, 100]
     # Note for the sequential retriever, the current implementation treats all generated interactions as positives (rating=5)
     # see src/nanoRecSys/training/mine_negatives_sasrec.py
     ranker_positive_threshold: float = (
@@ -140,15 +142,25 @@ class Settings(BaseSettings):
     llm_api_endpoint: str = (
         "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
     )
-    llm_api_model: str = "qwen3-max"
+    llm_api_model: str = "qwen3.5-plus"
+    # Qwen3.5-plus enables thinking by default
+    # Thinking mode requires a longer timeout
+    llm_enable_thinking: bool | None = (
+        False  # Set to None to use model default behavior
+    )
+    llm_api_timeout: int = 10
+    llm_output_dir: Path = artifacts_dir / "llm_ranker_lora"
     llm_history_len: int = (
         10  # Number of past interactions to include in the LLM prompt
     )
     llm_min_history_len: int = 5  # Minimum length for LLM ranker training
     llm_special_token: str = "<movie_emb>"
+    # Set to True for {special_token} {title} format, False for {title} {special_token} format
+    # LLaRA use the later https://arxiv.org/abs/2312.02445
+    llm_causal_prefixing: bool = False
     llm_lora_r: int = 16
     llm_lora_alpha: int = 32
-    llm_lora_dropout: float = 0  # For unsloth QLoRA
+    llm_lora_dropout: float = 0  # For unsloth QLoRA; set to 0 for unsloth performance
     llm_system_prompt_api: str = (
         "You are a movie recommendation assistant. "
         "You will be provided with a user's chronologically ordered movie viewing history as text titles, followed by a candidate movie title. "

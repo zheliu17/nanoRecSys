@@ -54,6 +54,7 @@ class LLMTrainingConfig:
     )
     report_to: str = "none"
     optim: str = "paged_adamw_32bit"
+    lr_scheduler_type: str = "cosine"
     positive_sample_ratio: float = 1.0
     random_neg_ratio: float = 0.01
     data_suffix: str = "llm_ranker"
@@ -389,7 +390,12 @@ def main(config: LLMTrainingConfig | None = None):
         tokenized["completion_mask"] = completion_masks
         return tokenized
 
-    dataset = dataset.map(tokenize_fn, batched=True, remove_columns=["text", "prompt"])
+    dataset = dataset.map(
+        tokenize_fn,
+        batched=True,
+        remove_columns=["text", "prompt"],
+        num_proc=config.dataloader_num_workers,
+    )
 
     logger.info(f"Generated {len(dataset)} SFT training samples.")
 
@@ -411,6 +417,7 @@ def main(config: LLMTrainingConfig | None = None):
         save_strategy="steps",
         save_steps=config.save_steps,
         optim=config.optim,
+        lr_scheduler_type=config.lr_scheduler_type,
         fp16=not is_bfloat16_supported(),
         bf16=is_bfloat16_supported(),
         remove_unused_columns=False,
@@ -459,6 +466,7 @@ if __name__ == "__main__":
     parser.add_argument("--projection_path", type=str)
     parser.add_argument("--report_to", type=str)
     parser.add_argument("--optim", type=str)
+    parser.add_argument("--lr_scheduler_type", type=str)
     parser.add_argument("--positive_sample_ratio", type=float)
     parser.add_argument("--random_neg_ratio", type=float)
     parser.add_argument("--data_suffix", type=str)

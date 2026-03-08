@@ -344,7 +344,7 @@ class APIScorer:
             cand_title = cand_titles[0] if cand_titles else "Unknown Movie"
             user_prompt = (
                 f"User Viewing History:\n{history_str}\n\n"
-                f"Candidate Movie: {cand_title}\n\nWill the user watch this next?"
+                f"Candidate Movie: {cand_title}\n\n{settings.llm_candidate_question}"
             )
             score, got_200 = self._api_call(settings.llm_system_prompt_api, user_prompt)
             if got_200:
@@ -531,14 +531,161 @@ class LocalLLMScorer:
         return results
 
 
+class ZeroShotLocalLLMScorer:
+    """Zero-shot baseline evaluating the base LLM on pure text prompts (no embeddings)."""
+
+    name = "ZeroShot"
+
+    def __init__(
+        self,
+        model_name: str = settings.llm_model_name,
+        batch_size: int = 8,
+    ) -> None:
+        self.model_name = model_name
+        self.batch_size = max(1, int(batch_size))
+
+    def setup(self, runner: LLMEvalRunner) -> None:
+        import logging
+
+        # WORKAROUND: https://github.com/huggingface/transformers/pull/44307
+        # Will be removed when above PR is released
+        # This prevents the `TypeError: not all arguments converted during string formatting` error.
+        logging.getLogger("transformers.modeling_attn_mask_utils").setLevel(
+            logging.ERROR
+        )
+
+        logger = get_logger()
+        self.item_map = runner.item_map
+        self.movie_mapping = runner.movie_mapping
+        self.device = runner.evaluator.device
+
+        logger.info("Loading base LLM (zero-shot text only)…")
+        self.llm, self.tokenizer = FastLanguageModel.from_pretrained(
+            model_name=self.model_name,
+            max_seq_length=settings.llm_max_seq_length,
+            dtype=None,
+            load_in_4bit=True,
+        )
+        FastLanguageModel.for_inference(self.llm)
+
+        # Get all token IDs that represent some form of "Yes" or "No"
+        self._yes_token_ids = []
+        self._no_token_ids = []
+        for word in ["Yes", "yes", "YES", " Yes", " yes", " YES"]:
+            token_id = self.tokenizer.convert_tokens_to_ids(word)
+            if token_id != self.tokenizer.unk_token_id:
+                self._yes_token_ids.append(token_id)
+        for word in ["No", "no", "NO", " No", " no", " NO"]:
+            token_id = self.tokenizer.convert_tokens_to_ids(word)
+            if token_id != self.tokenizer.unk_token_id:
+                self._no_token_ids.append(token_id)
+
+        self.tokenizer.padding_side = "right"
+        if self.tokenizer.pad_token_id is None:
+            self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
+
+    def _titles(self, ids: list[int]) -> list[str]:
+        titles, _ = decode_ids_to_titles_and_keep_ids(
+            ids, self.item_map, self.movie_mapping
+        )
+        return titles
+
+    def score(
+        self, u_idx: int, history_ids: list[int], candidates: list[int]
+    ) -> list[tuple[int, float]]:
+        history_titles = self._titles(history_ids)
+        history_str = "\n".join(f"{i + 1}. {t}" for i, t in enumerate(history_titles))
+
+        system_prompt = settings.llm_system_prompt_api
+
+        all_titles, valid_cands = decode_ids_to_titles_and_keep_ids(
+            candidates, self.item_map, self.movie_mapping
+        )
+        title_map = dict(zip(valid_cands, all_titles))
+
+        results: list[tuple[int, float]] = []
+        for start in range(0, len(candidates), self.batch_size):
+            chunk = candidates[start : start + self.batch_size]
+            batch_ids = [cid for cid in chunk if cid in title_map]
+
+            if not batch_ids:
+                for cid in chunk:
+                    results.append((cid, -999.0))
+                continue
+
+            prompts = []
+            for cid in batch_ids:
+                cand_title = title_map[cid]
+                user_prompt = (
+                    f"User Viewing History:\n{history_str}\n\n"
+                    f"Candidate Movie: {cand_title}\n\n{settings.llm_candidate_question}"
+                )
+
+                messages = [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ]
+
+                text = self.tokenizer.apply_chat_template(
+                    messages, tokenize=False, add_generation_prompt=True
+                )
+                if not isinstance(text, str):
+                    text = str(text)
+                prompts.append(text)
+
+            tokenizer_out = self.tokenizer(
+                prompts,
+                return_tensors="pt",
+                padding=True,
+                truncation=True,
+                max_length=settings.llm_max_seq_length,
+            )
+
+            input_ids = tokenizer_out["input_ids"].to(self.device)
+            attention_mask = tokenizer_out["attention_mask"].to(self.device)
+
+            with torch.inference_mode():
+                out = self.llm(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    use_cache=False,
+                )
+
+                # Since we use right-padding, find the actual end of each sequence
+                seq_lengths = attention_mask.sum(dim=1)
+                last_token_indices = seq_lengths - 1
+                row_idx = torch.arange(len(batch_ids), device=self.device)
+
+                # LogExpSum over all "Yes" and "No" token variations
+                # Logits shape: (batch_size, seq_len, vocab_size)
+                last_logits = out.logits[row_idx, last_token_indices, :]
+
+                yes_logits = last_logits[:, self._yes_token_ids]
+                no_logits = last_logits[:, self._no_token_ids]
+
+                # compute log(sum(exp(logits))) to gracefully aggregate probabilities
+                yes_scores = torch.logsumexp(yes_logits, dim=-1)
+                no_scores = torch.logsumexp(no_logits, dim=-1)
+
+                scores = yes_scores - no_scores
+                scores_list = scores.float().cpu().tolist()
+
+            score_map = {cid: s for cid, s in zip(batch_ids, scores_list)}
+
+            for cid in chunk:
+                results.append((cid, score_map.get(cid, -999.0)))
+
+        return results
+
+
 def _build_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
         description="Evaluate LLM-based re-rankers on the two-tower retrieval candidates."
     )
     p.add_argument(
         "--method",
-        choices=["api", "local", "both", "retriever"],
-        help="Which ranker(s) to evaluate (api/local/both/retriever).",
+        choices=["api", "local", "zeroshot", "both", "all", "retriever"],
+        help="Which ranker(s) to evaluate (api/local/zeroshot/both/all/retriever).",
     )
     p.add_argument("--num_users", type=int, help="Number of test users to evaluate.")
     # API-scorer options
@@ -599,15 +746,22 @@ def evaluate(
 
     # retriever is always included as a baseline
     scorers: list[Scorer] = [RetrieverScorer()]
-    if method in ("api", "both"):
+    if method in ("api", "both", "all"):
         scorers.append(APIScorer(clean_cache=clean_cache))
-    if method in ("local", "both"):
+    if method in ("local", "both", "all"):
         scorers.append(
             LocalLLMScorer(
                 model_name=model_name or settings.llm_model_name,
                 adapter_path=adapter_path,
                 batch_size=local_batch_size,
                 use_lora=use_lora,
+            )
+        )
+    if method in ("zeroshot", "all"):
+        scorers.append(
+            ZeroShotLocalLLMScorer(
+                model_name=model_name or settings.llm_model_name,
+                batch_size=local_batch_size,
             )
         )
 

@@ -157,7 +157,7 @@ class Settings(BaseSettings):
     llm_special_token: str = "<movie_emb>"
     # Set to True for {special_token} {title} format, False for {title} {special_token} format
     # LLaRA use the later https://arxiv.org/abs/2312.02445
-    llm_causal_prefixing: bool = False
+    llm_causal_prefixing: bool = True
     llm_lora_r: int = 16
     llm_lora_alpha: int = 32
     llm_lora_dropout: float = 0  # For unsloth QLoRA; set to 0 for unsloth performance
@@ -206,5 +206,6 @@ for _path in (
     settings.raw_data_dir,
     settings.processed_data_dir,
     settings.artifacts_dir,
+    settings.llm_output_dir,
 ):
     _path.mkdir(parents=True, exist_ok=True)

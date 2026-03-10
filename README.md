@@ -7,13 +7,24 @@
 
 <https://github.com/user-attachments/assets/6d0c4713-c8ab-43ba-b197-d2602244cf35>
 
-## Key Features
+
+## Main System
 
 * **Modern Retrieval Architecture:** A **Sequential Transformer** (SASRec-based) enhanced with RoPE, SwiGLU, and InfoNCE Loss.
   * **0.287 HR@10** on MovieLens-20M, outperforming standard SASRec baselines by ~40% and matching optimized implementations (e.g., BERT4Rec).
 * **High-Throughput Serving:** ONNX inference engine (FastAPI + AsyncIO) backed by Redis (caching) and **FAISS** (vector search).
 * **Production Engineering:** A complete Docker Compose orchestration, CI/CD workflows, and a Streamlit frontend.
 * **Full-Lifecycle Implementation:** From raw data processing and offline training (PyTorch) to online serving and latency benchmarking.
+
+---
+
+### Multimodal LLM Re-ranker (Experimental)
+
+This repo implements a **Multimodal LLM Ranker** (textual context with collaborative item embeddings) built on `Qwen2.5-1.5B`. Our local **4-bit quantized 1.5B model** significantly outperforms the state-of-the-art `Qwen3.5-Plus` (397B) in zero-shot candidate ranking:
+
+* **+62% improvement** in `HitRate@10` (0.256 vs 0.158); **+73% improvement** in `NDCG@10` (0.141 vs 0.081)
+
+*[Read the detailed architecture, benchmarks, and training ablations in the docs here](docs/LLM_Ranker.md)*.
 
 ## Evaluation & Benchmarks
 

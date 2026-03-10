@@ -136,12 +136,10 @@ class Settings(BaseSettings):
     user_embedding_lr: float = 0.0  # Effectively frozen if 0
 
     # --- LLM Ranker ---
-    llm_model_name: str = "Qwen/Qwen2.5-1.5B-Instruct"
-    llm_max_seq_length: int = 2048  # Max sequence length for LLM input
-    llm_api_key: str = ""  # Set your API key here or via environment variable
-    llm_api_endpoint: str = (
-        "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
-    )
+    # Set your API here or via environment variable
+    llm_api_key: str = ""
+    llm_api_endpoint: str = ""
+    llm_max_concurrent_requests: int = 10  # concurrent API requests
     llm_api_model: str = "qwen3.5-plus"
     # Qwen3.5-plus enables thinking by default
     # Thinking mode requires a longer timeout
@@ -149,6 +147,9 @@ class Settings(BaseSettings):
         False  # Set to None to use model default behavior
     )
     llm_api_timeout: int = 10
+    # local LLM settings:
+    llm_model_name: str = "Qwen/Qwen2.5-1.5B-Instruct"
+    llm_max_seq_length: int = 2048  # Max sequence length for LLM input
     llm_output_dir: Path = artifacts_dir / "llm_ranker_lora"
     llm_history_len: int = (
         10  # Number of past interactions to include in the LLM prompt

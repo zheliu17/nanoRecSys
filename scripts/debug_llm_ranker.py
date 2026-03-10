@@ -30,7 +30,7 @@ from nanoRecSys.utils.prompt_utils import (
 
 
 class MinimalRunnerMock:
-    """Mock to satisfy LocalLLMScorer's data requirements without loading Faiss, metrics, full evaluator, etc."""
+    """Mock to satisfy LocalLLMScorer's data requirements without loading full evaluator"""
 
     def __init__(self, item_map, movie_mapping, device, item_embs):
         self.item_map = item_map

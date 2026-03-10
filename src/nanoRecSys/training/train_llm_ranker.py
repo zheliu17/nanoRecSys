@@ -16,6 +16,7 @@ from unsloth import is_bfloat16_supported  # isort: skip
 
 import argparse
 import os
+import warnings
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -40,14 +41,19 @@ class LLMTrainingConfig:
     """Configuration for LLM Ranker training."""
 
     model_name: str = field(default_factory=lambda: settings.llm_model_name)
-    n_samples: int = 10000
-    batch_size: int = 2
-    dataloader_num_workers: int = 2
-    gradient_accumulation_steps: int = 8
-    learning_rate: float = 2e-4
-    warmup_steps: float = 0
+    n_samples: int = 800_000
+    batch_size: int = 64
+    dataloader_num_workers: int = 6
+    tokenize_num_proc: int | None = (
+        None  # Defaults to dataloader_num_workers if not set
+    )
+    tokenize_batch_size: int = 1000
+    tokenize_writer_batch_size: int = 1000
+    gradient_accumulation_steps: int = 1
+    learning_rate: float = 5e-5
+    warmup_steps: float = 2000
     epochs: int = 1
-    save_steps: int | None = 500
+    save_steps: int | None = 1000
     resume_from_checkpoint: str | bool | None = None
     projection_path: str | None = (
         None  # Optional path to pre-trained projection weights
@@ -56,12 +62,12 @@ class LLMTrainingConfig:
     optim: str = "paged_adamw_32bit"
     lr_scheduler_type: str = "cosine"
     positive_sample_ratio: float = 1.0
-    random_neg_ratio: float = 0.01
+    random_neg_ratio: float = 1
     data_suffix: str = "llm_ranker"
     use_lora: bool = True
 
 
-def load_data(sample_size=10000, suffix="llm_ranker"):
+def load_data(sample_size, suffix="llm_ranker"):
     movies_path = settings.raw_data_dir / "movies.csv"
     item_map_path = settings.processed_data_dir / "item_map.npy"
 
@@ -93,7 +99,7 @@ def load_data(sample_size=10000, suffix="llm_ranker"):
     )
 
 
-def build_dataset(
+def generate_sft_examples(
     int_df,
     hard_df,
     rand_df,
@@ -102,40 +108,38 @@ def build_dataset(
     positive_sample_ratio=1.0,
     random_neg_ratio=0.1,
 ):
-    texts = []
-    prompts = []
-    item_sequences = []
-    target_labels = []
-
-    # Counters for logging
-    pos_count = 0
-    hard_count = 0
-    rand_count = 0
-
-    logger = get_logger()
-
     system_prompt = settings.llm_system_prompt_local
 
     # Pre-build {movieId: title} dict once to avoid repeated set_index inside the loop
     movie_mapping = movies_df.set_index("movieId")["title"].to_dict()
+    rand_cols = [col for col in rand_df.columns if col.startswith("neg_item_idx_")]
 
-    # Converting to dictionaries avoids slow pandas .iloc and iterrows lookups
-    int_records = int_df.to_dict("records")
-    hard_records = hard_df.to_dict("records")
-    rand_records = rand_df.to_dict("records")
+    int_rows = int_df.itertuples(index=False, name=None)
+    hard_rows = hard_df.itertuples(index=False, name=None)
+    rand_rows = rand_df.itertuples(index=False, name=None)
 
-    for row, hard_row, rand_row in zip(int_records, hard_records, rand_records):
-        pos_item = int(row["item_idx"])
-        hard_neg = int(hard_row["neg_item_idx"])
+    int_columns = list(int_df.columns)
+    hard_columns = list(hard_df.columns)
+    rand_columns = list(rand_df.columns)
+
+    history_idx = int_columns.index("history_sequence")
+    pos_item_idx = int_columns.index("item_idx")
+    hard_neg_idx = hard_columns.index("neg_item_idx")
+    rand_neg_indices = [rand_columns.index(col) for col in rand_cols]
+
+    for row, hard_row, rand_row in zip(int_rows, hard_rows, rand_rows):
+        history_sequence = row[history_idx]
+        pos_item = int(row[pos_item_idx])
+        hard_neg = int(hard_row[hard_neg_idx])
 
         if (
-            "history_sequence" not in row
-            or len(row["history_sequence"]) < settings.llm_min_history_len
+            history_sequence is None
+            or len(history_sequence) < settings.llm_min_history_len
         ):
             continue
 
         # The history sequence from mine_negatives_sasrec is 0-indexed
-        history_ids = list(row["history_sequence"])
+        history_ids = list(history_sequence)
 
         history_ids = history_ids[-settings.llm_history_len :]
 
@@ -150,61 +154,93 @@ def build_dataset(
             history_str, pos_item, item_map, movie_mapping, system_prompt, "Yes"
         )
         if valid_cand_pos is not None and np.random.rand() < positive_sample_ratio:
-            texts.append(result[0])
-            prompts.append(result[1])
-            item_sequences.append(valid_history_ids + [valid_cand_pos])
-            target_labels.append(1)
-            pos_count += 1
+            yield {
+                "text": result[0],
+                "prompt": result[1],
+                "item_sequence": valid_history_ids + [valid_cand_pos],
+                "target_label": 1,
+            }
 
         # Hard Negative
         result, valid_cand_hard = build_sft_example_for_candidate(
             history_str, hard_neg, item_map, movie_mapping, system_prompt, "No"
         )
         if valid_cand_hard is not None:
-            texts.append(result[0])
-            prompts.append(result[1])
-            item_sequences.append(valid_history_ids + [valid_cand_hard])
-            target_labels.append(0)
-            hard_count += 1
+            yield {
+                "text": result[0],
+                "prompt": result[1],
+                "item_sequence": valid_history_ids + [valid_cand_hard],
+                "target_label": 0,
+            }
 
         # Random Negative
         if np.random.rand() < random_neg_ratio:
             # Load all pre-mined random negatives to prevent false negatives
             # Columns are named neg_item_idx_1, neg_item_idx_2, etc.
-            rand_cols = [
-                col for col in rand_row.keys() if col.startswith("neg_item_idx_")
-            ]
-            for rand_col in rand_cols:
-                rand_neg = int(rand_row[rand_col])
+            for rand_neg_idx in rand_neg_indices:
+                rand_neg = int(rand_row[rand_neg_idx])
                 result, valid_cand_rand = build_sft_example_for_candidate(
                     history_str, rand_neg, item_map, movie_mapping, system_prompt, "No"
                 )
                 if valid_cand_rand is not None:
-                    texts.append(result[0])
-                    prompts.append(result[1])
-                    item_sequences.append(valid_history_ids + [valid_cand_rand])
-                    target_labels.append(0)
-                    rand_count += 1
+                    yield {
+                        "text": result[0],
+                        "prompt": result[1],
+                        "item_sequence": valid_history_ids + [valid_cand_rand],
+                        "target_label": 0,
+                    }
 
-    dataset = Dataset.from_dict(
-        {
-            "text": texts,
-            "prompt": prompts,
-            "item_sequence": item_sequences,
-            "target_label": target_labels,
-        }
-    )
 
-    # Log counts for debugging/monitoring
-    logger.info(
-        "SFT dataset samples: positives=%d, hard_negatives=%d, random_negatives=%d, total=%d",
-        pos_count,
-        hard_count,
-        rand_count,
-        len(texts),
+def build_dataset(
+    int_df,
+    hard_df,
+    rand_df,
+    movies_df,
+    item_map,
+    positive_sample_ratio=1.0,
+    random_neg_ratio=0.1,
+):
+    dataset = Dataset.from_generator(
+        generate_sft_examples,
+        # TODO: cache random dataset generation
+        # cache_dir=str(dataset_cache_dir),
+        gen_kwargs={
+            "int_df": int_df,
+            "hard_df": hard_df,
+            "rand_df": rand_df,
+            "movies_df": movies_df,
+            "item_map": item_map,
+            "positive_sample_ratio": positive_sample_ratio,
+            "random_neg_ratio": random_neg_ratio,
+        },
     )
 
     return dataset
+
+
+def tokenize_sft_examples(examples, tokenizer, max_seq_length):
+    # We tokenize the entire text ("prompt" + "completion string")
+    tokenized = tokenizer(examples["text"], truncation=True, max_length=max_seq_length)
+
+    # Generate `completion_mask` for the TRL collator so it can set prompt tokens to -100 in labels
+    completion_masks = []
+    for prompt, input_ids in zip(examples["prompt"], tokenized["input_ids"]):
+        # Tokenize ONLY the prompt to find the index where the completion starts
+        p_ids = tokenizer(prompt, add_special_tokens=False)["input_ids"]
+
+        # If the tokenizer injected a BOS token into the main input_ids, adjust length
+        bos_offset = (
+            1 if len(input_ids) > 0 and input_ids[0] == tokenizer.bos_token_id else 0
+        )
+
+        p_len = min(len(p_ids) + bos_offset, len(input_ids))
+
+        # 0 = do not train on these (prompt), 1 = train on these (completion)
+        mask = [0] * p_len + [1] * (len(input_ids) - p_len)
+        completion_masks.append(mask)
+
+    tokenized["completion_mask"] = completion_masks
+    return tokenized
 
 
 class MultimodalDataCollator(DataCollatorForLanguageModeling):
@@ -308,7 +344,11 @@ class CustomSFTTrainer(SFTTrainer):
                 logger.info(
                     "Stage 1 -> Stage 2 transition detected. Restarting optimizer/scheduler."
                 )
-                logger.warning("Not recommended; Consider using projection_path.")
+                warnings.warn(
+                    "Use projection_path instead of loading from ckpt",
+                    DeprecationWarning,
+                    stacklevel=2,
+                )
                 return
         super()._load_optimizer_and_scheduler(checkpoint)
 
@@ -319,7 +359,7 @@ def main(config: LLMTrainingConfig | None = None):
 
     logger = get_logger()
 
-    logger.info("Loading LLMRanker (Base model + LORA + Projection)...")
+    logger.info("Loading LLMRanker (Base model + LoRA + Projection)...")
 
     i_path = settings.artifacts_dir / "item_embeddings.npy"
     if not i_path.exists():
@@ -339,6 +379,7 @@ def main(config: LLMTrainingConfig | None = None):
     )
     if config.projection_path is not None:
         state_dict = torch.load(config.projection_path, map_location=model.device)
+        logger.info(f"Loading projection weights from {config.projection_path}")
         model.projection.load_state_dict(state_dict, strict=True)
 
     tokenizer = model.tokenizer
@@ -360,41 +401,29 @@ def main(config: LLMTrainingConfig | None = None):
         random_neg_ratio=config.random_neg_ratio,
     )
 
-    def tokenize_fn(examples):
-        # We tokenize the entire text ("prompt" + "completion string")
-        tokenized = tokenizer(
-            examples["text"], truncation=True, max_length=settings.llm_max_seq_length
-        )
+    tokenize_num_proc = config.tokenize_num_proc
+    if tokenize_num_proc is None:
+        tokenize_num_proc = config.dataloader_num_workers
 
-        # Generate `completion_mask` for the TRL collator so it can set prompt tokens to -100 in labels
-        completion_masks = []
-        for text, prompt, input_ids in zip(
-            examples["text"], examples["prompt"], tokenized["input_ids"]
-        ):
-            # Tokenize ONLY the prompt to find the index where the completion starts
-            p_ids = tokenizer(prompt, add_special_tokens=False)["input_ids"]
-
-            # If the tokenizer injected a BOS token into the main input_ids, adjust length
-            bos_offset = (
-                1
-                if len(input_ids) > 0 and input_ids[0] == tokenizer.bos_token_id
-                else 0
-            )
-
-            p_len = min(len(p_ids) + bos_offset, len(input_ids))
-
-            # 0 = do not train on these (prompt), 1 = train on these (completion)
-            mask = [0] * p_len + [1] * (len(input_ids) - p_len)
-            completion_masks.append(mask)
-
-        tokenized["completion_mask"] = completion_masks
-        return tokenized
+    logger.info(
+        "Preparing SFT dataset with tokenize_num_proc=%d, tokenize_batch_size=%d, tokenize_writer_batch_size=%d",
+        tokenize_num_proc,
+        config.tokenize_batch_size,
+        config.tokenize_writer_batch_size,
+    )
 
     dataset = dataset.map(
-        tokenize_fn,
+        tokenize_sft_examples,
         batched=True,
+        batch_size=config.tokenize_batch_size,
         remove_columns=["text", "prompt"],
-        num_proc=config.dataloader_num_workers,
+        writer_batch_size=config.tokenize_writer_batch_size,
+        fn_kwargs={
+            "tokenizer": tokenizer,
+            "max_seq_length": settings.llm_max_seq_length,
+        },
+        num_proc=tokenize_num_proc,
+        desc="Tokenizing SFT dataset",
     )
 
     logger.info(f"Generated {len(dataset)} SFT training samples.")
@@ -442,7 +471,7 @@ def main(config: LLMTrainingConfig | None = None):
 
     if config.use_lora:
         trainer.model.llm.save_pretrained(output_dir)
-        logger.info(f"Saved LORA to {output_dir}")
+        logger.info(f"Saved LoRA to {output_dir}")
 
     torch.save(
         trainer.model.projection.state_dict(),
@@ -457,6 +486,9 @@ if __name__ == "__main__":
     parser.add_argument("--n_samples", type=int)
     parser.add_argument("--batch_size", type=int)
     parser.add_argument("--dataloader_num_workers", type=int)
+    parser.add_argument("--tokenize_num_proc", type=int)
+    parser.add_argument("--tokenize_batch_size", type=int)
+    parser.add_argument("--tokenize_writer_batch_size", type=int)
     parser.add_argument("--gradient_accumulation_steps", type=int)
     parser.add_argument("--learning_rate", type=float)
     parser.add_argument("--warmup_steps", type=int)

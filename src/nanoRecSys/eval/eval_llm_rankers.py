@@ -23,12 +23,13 @@ except ImportError:
     FastLanguageModel = None  # type: ignore
 
 import argparse
+import asyncio
 import json
 import os
 import re
-import time
 from typing import Protocol
 
+import aiohttp
 import numpy as np
 import pandas as pd
 import requests
@@ -83,9 +84,9 @@ class LLMEvalRunner:
         )
         self._load_seq_dict()
 
-        self.logger.info("Initialising OfflineEvaluator + two-tower embeddings…")
+        self.logger.info("Initialising OfflineEvaluator + two-tower embeddings...")
         self.evaluator = OfflineEvaluator(batch_size=1024, remove_history=True)
-        self.evaluator._load_embeddings()
+        self.evaluator._load_item_embeddings()
         self.evaluator._load_transformer_user_tower()
 
     def _load_seq_dict(self) -> None:
@@ -126,7 +127,7 @@ class LLMEvalRunner:
             Nested dict mapping scorer name to averaged metric dict.
         """
         for scorer in scorers:
-            self.logger.info(f"[{scorer.name}] Setting up scorer…")
+            self.logger.info(f"[{scorer.name}] Setting up scorer...")
             scorer.setup(self)
 
         metrics_sum: dict[str, dict[str, float]] = {s.name: {} for s in scorers}
@@ -206,13 +207,17 @@ class APIScorer:
 
     Scores are the log-probability of the token ``Yes`` given the prompt.
     Results are persisted to a JSON cache so interrupted runs can resume.
+    Uses concurrent requests for up to 10x speedup on typical APIs.
     """
 
     name = "LLMAPIRanker"
 
-    def __init__(self, clean_cache: bool = False) -> None:
+    def __init__(
+        self, clean_cache: bool = False, max_concurrent: int | None = None
+    ) -> None:
         self.cache_path = settings.artifacts_dir / "api_responses_cache.json"
         self.cache: dict[str, float] = {}
+        self.max_concurrent = max_concurrent or settings.llm_max_concurrent_requests
         if clean_cache and os.path.exists(self.cache_path):
             os.remove(self.cache_path)
             get_logger().info(f"Removed cache file {self.cache_path}")
@@ -246,13 +251,14 @@ class APIScorer:
         )
         return titles
 
-    def _api_call(
-        self, system_prompt: str, user_prompt: str, max_retries: int = 3
+    async def _api_call_async(
+        self,
+        session: aiohttp.ClientSession,
+        system_prompt: str,
+        user_prompt: str,
+        max_retries: int = 3,
     ) -> tuple[float, bool]:
-        """Return (score, success) where success indicates status_code == 200.
-
-        Returns score of ``-999.0`` on any failure. Only cache when success is True.
-        """
+        """Async version of _api_call. Returns (score, success)."""
         logger = get_logger()
         data = {
             "model": settings.llm_api_model,
@@ -265,67 +271,139 @@ class APIScorer:
             "max_tokens": 1,
             "temperature": 0.0,
         }
-        # Only include the explicit `enable_thinking` key when it's disabled
-        # in settings. This avoids sending the key when it's enabled/default.
         if settings.llm_enable_thinking is not None:
             data["enable_thinking"] = settings.llm_enable_thinking
+
         for attempt in range(max_retries):
             try:
-                resp = self.session.post(
+                async with session.post(
                     settings.llm_api_endpoint,
                     json=data,
-                    timeout=settings.llm_api_timeout,
-                )
-                if resp.status_code == 200:
-                    try:
-                        top_lps = resp.json()["choices"][0]["logprobs"]["content"][0][
-                            "top_logprobs"
-                        ]
-                    except Exception as e:
-                        logger.info(f"API response parsing failed: {e}")
+                    timeout=aiohttp.ClientTimeout(total=settings.llm_api_timeout),
+                ) as resp:
+                    if resp.status == 200:
+                        try:
+                            resp_data = await resp.json()
+                            top_lps = resp_data["choices"][0]["logprobs"]["content"][0][
+                                "top_logprobs"
+                            ]
+                        except Exception as e:
+                            logger.info(f"API response parsing failed: {e}")
+                            return (-999.0, True)
+
+                        yes_probs = []
+                        no_probs = []
+                        for lp in top_lps:
+                            clean = re.sub(
+                                r"[^A-Za-z0-9]", "", lp.get("token", "")
+                            ).lower()
+                            if clean == "yes":
+                                yes_probs.append(float(lp.get("logprob", -999.0)))
+                            elif clean == "no":
+                                no_probs.append(float(lp.get("logprob", -999.0)))
+
+                        yes_prob = (
+                            float(np.logaddexp.reduce(yes_probs))
+                            if yes_probs
+                            else -999.0
+                        )
+                        no_prob = (
+                            float(np.logaddexp.reduce(no_probs)) if no_probs else -999.0
+                        )
+
+                        if yes_prob != -999.0 and no_prob != -999.0:
+                            return (yes_prob - no_prob, True)
+                        elif yes_prob != -999.0:
+                            return (yes_prob, True)
+
+                        logger.info(
+                            "API call succeeded but 'Yes' token not found in top_logprobs"
+                        )
                         return (-999.0, True)
 
-                    yes_probs = []
-                    no_probs = []
-                    for lp in top_lps:
-                        clean = re.sub(r"[^A-Za-z0-9]", "", lp.get("token", "")).lower()
-                        if clean == "yes":
-                            yes_probs.append(float(lp.get("logprob", -999.0)))
-                        elif clean == "no":
-                            no_probs.append(float(lp.get("logprob", -999.0)))
+                    if resp.status == 429:
+                        await asyncio.sleep(2**attempt)
+                        continue
 
-                    yes_prob = (
-                        float(np.logaddexp.reduce(yes_probs)) if yes_probs else -999.0
-                    )
-                    no_prob = (
-                        float(np.logaddexp.reduce(no_probs)) if no_probs else -999.0
-                    )
-
-                    if yes_prob != -999.0 and no_prob != -999.0:
-                        return (yes_prob - no_prob, True)
-                    elif yes_prob != -999.0:
-                        return (yes_prob, True)
-
+                    response_text = await resp.text()
                     logger.info(
-                        "API call succeeded but 'Yes' token not found in top_logprobs"
+                        f"API call failed: status={resp.status} body={response_text[:200]}"
                     )
-                    return (-999.0, True)
-
-                if resp.status_code == 429:
-                    # rate limited, retry after backoff
-                    time.sleep(2**attempt)
-                    continue
-
-                # other non-success status codes
-                logger.info(
-                    f"API call failed: status={resp.status_code} body={resp.text[:200]}"
-                )
-                return (-999.0, False)
+                    return (-999.0, False)
+            except asyncio.TimeoutError:
+                logger.info(f"API call timeout (attempt {attempt + 1}/{max_retries})")
+                await asyncio.sleep(2**attempt)
             except Exception as e:
                 logger.info(f"API call exception: {e}")
-                time.sleep(2**attempt)
+                await asyncio.sleep(2**attempt)
+
         logger.info("API call failed after retries")
         return (-999.0, False)
+
+    async def _score_candidates_async(
+        self, u_idx: int, history_str: str, candidates: list[int]
+    ) -> list[tuple[int, float]]:
+        """Score candidates concurrently using async API calls."""
+        results: list[tuple[int, float]] = []
+        pending_tasks = {}
+
+        connector = aiohttp.TCPConnector(limit_per_host=self.max_concurrent)
+        headers = {
+            "Authorization": f"Bearer {settings.llm_api_key}",
+            "Content-Type": "application/json",
+        }
+        async with aiohttp.ClientSession(
+            connector=connector, headers=headers
+        ) as session:
+            for cid in candidates:
+                key = f"{u_idx}_{cid}"
+                if key in self.cache:
+                    results.append((cid, self.cache[key]))
+                    continue
+
+                cand_titles = self._titles([cid])
+                cand_title = cand_titles[0] if cand_titles else "Unknown Movie"
+                user_prompt = (
+                    f"User Viewing History:\n{history_str}\n\n"
+                    f"Candidate Movie: {cand_title}\n\n{settings.llm_candidate_question}"
+                )
+
+                task = asyncio.create_task(
+                    self._api_call_async(
+                        session, settings.llm_system_prompt_api, user_prompt
+                    )
+                )
+                pending_tasks[task] = (cid, key)
+
+                # Limit concurrent requests
+                if len(pending_tasks) >= self.max_concurrent:
+                    done, pending_tasks_set = await asyncio.wait(
+                        pending_tasks.keys(), return_when=asyncio.FIRST_COMPLETED
+                    )
+                    for completed_task in done:
+                        cid_tmp, key_tmp = pending_tasks.pop(completed_task)
+                        score, got_200 = await completed_task
+                        if got_200:
+                            self.cache[key_tmp] = score
+                        results.append((cid_tmp, score))
+
+            # Wait for remaining tasks
+            if pending_tasks:
+                done, _ = await asyncio.wait(
+                    pending_tasks.keys(), return_when=asyncio.ALL_COMPLETED
+                )
+                for task in done:
+                    cid_tmp, key_tmp = pending_tasks.pop(task)
+                    score, got_200 = await task
+                    if got_200:
+                        self.cache[key_tmp] = score
+                    results.append((cid_tmp, score))
+
+        # Persist cache after all requests
+        with open(self.cache_path, "w") as f:
+            json.dump(self.cache, f)
+
+        return results
 
     def score(
         self, u_idx: int, history_ids: list[int], candidates: list[int]
@@ -333,27 +411,13 @@ class APIScorer:
         history_titles = self._titles(history_ids)
         history_str = "\n".join(f"{i + 1}. {t}" for i, t in enumerate(history_titles))
 
-        results: list[tuple[int, float]] = []
-        for cid in candidates:
-            key = f"{u_idx}_{cid}"
-            if key in self.cache:
-                results.append((cid, self.cache[key]))
-                continue
-
-            cand_titles = self._titles([cid])
-            cand_title = cand_titles[0] if cand_titles else "Unknown Movie"
-            user_prompt = (
-                f"User Viewing History:\n{history_str}\n\n"
-                f"Candidate Movie: {cand_title}\n\n{settings.llm_candidate_question}"
+        try:
+            return asyncio.run(
+                self._score_candidates_async(u_idx, history_str, candidates)
             )
-            score, got_200 = self._api_call(settings.llm_system_prompt_api, user_prompt)
-            if got_200:
-                self.cache[key] = score
-                with open(self.cache_path, "w") as f:
-                    json.dump(self.cache, f)
-            results.append((cid, score))
-
-        return results
+        except Exception as e:
+            # You may need nest_asyncio if running with an existing event loop (e.g. Jupyter)
+            raise RuntimeError(f"Async scoring failed: {e}") from e
 
 
 class LocalLLMScorer:
@@ -388,7 +452,7 @@ class LocalLLMScorer:
 
         logger.info(
             "Loading base LLM + projection layer"
-            + (" + LoRA adapter…" if self.use_lora else "…")
+            + (" + LoRA adapter..." if self.use_lora else "...")
         )
         sasrec_dim = self.item_embs.shape[1]
         ranker = LLMRanker(
@@ -559,7 +623,7 @@ class ZeroShotLocalLLMScorer:
         self.movie_mapping = runner.movie_mapping
         self.device = runner.evaluator.device
 
-        logger.info("Loading base LLM (zero-shot text only)…")
+        logger.info("Loading base LLM (zero-shot text only)...")
         self.llm, self.tokenizer = FastLanguageModel.from_pretrained(
             model_name=self.model_name,
             max_seq_length=settings.llm_max_seq_length,

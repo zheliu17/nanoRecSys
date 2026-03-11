@@ -50,7 +50,7 @@ class LLMTrainingConfig:
     tokenize_batch_size: int = 1000
     tokenize_writer_batch_size: int = 1000
     gradient_accumulation_steps: int = 1
-    learning_rate: float = 5e-5
+    learning_rate: float = 1e-4
     warmup_steps: float = 2000
     epochs: int = 1
     save_steps: int | None = 1000

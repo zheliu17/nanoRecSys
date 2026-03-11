@@ -86,7 +86,7 @@ class LLMRanker(nn.Module):
                     "down_proj",
                 ],
                 lora_alpha=lora_alpha,
-                lora_dropout=lora_dropout,  # Supports 0 ideally but ok
+                lora_dropout=lora_dropout,
                 bias="none",
                 use_gradient_checkpointing="unsloth",
             )

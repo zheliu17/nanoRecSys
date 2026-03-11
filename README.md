@@ -20,11 +20,11 @@
 
 ### Multimodal LLM Re-ranker (Experimental)
 
-This repo implements a **Multimodal LLM Ranker** (textual context with collaborative item embeddings) built on `Qwen2.5-1.5B`. Our local **4-bit quantized 1.5B model** significantly outperforms the state-of-the-art `Qwen3.5-Plus` (397B) in zero-shot candidate ranking:
+In addition to the main pipeline, this repo implements a **Multimodal LLM Ranker** (textual context with collaborative item embeddings) built on `Qwen2.5-1.5B`. Our local **4-bit quantized 1.5B model** significantly outperforms the state-of-the-art `Qwen3.5-Plus` (397B) in zero-shot candidate ranking:
 
 * **+62% improvement** in `HitRate@10` (0.256 vs 0.158); **+73% improvement** in `NDCG@10` (0.141 vs 0.081)
 
-*[Read the detailed architecture, benchmarks, and training ablations in the docs here](docs/LLM_Ranker.md)*.
+*[Read the detailed architecture, benchmarks, and training ablations in the docs here](docs/LLM_ranker.md)*.
 
 ## Evaluation & Benchmarks
 

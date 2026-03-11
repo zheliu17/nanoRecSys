@@ -2,7 +2,7 @@
 
 This document details the architecture, training dynamics, engineering optimizations, and empirical ablations of the custom multimodal LLM ranker implemented in this repository. The model is designed to efficiently re-rank the top 100 candidates surfaced by the first-stage retriever.
 
-## Methodology
+## Methodology [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/zheliu17/nanoRecSys/blob/main/docs/LLM_training.ipynb)
 
 Unlike approaches such as LLaRA[^1], which frames the task as a multiple-choice selection from a small pool, this ranker treats the problem as a pointwise probability scoring task.
 [^1]: Liao, Jiayi, et al. "Llara: Large language-recommendation assistant." ACM SIGIR 2024. <https://arxiv.org/abs/2312.02445>
@@ -14,12 +14,10 @@ Unlike approaches such as LLaRA[^1], which frames the task as a multiple-choice 
 
 ## Evaluation Benchmarks
 
-The table below compares the fine-tuned local LLM ranker against the first-stage SASRec-style retriever, a zero-shot local baseline, and a state-of-the-art API baseline. Evaluation metrics are calculated on the **first 500 users** in the evaluation set.
-
-*(Note: The zero-shot and API baselines rely entirely on the history of text titles, as collaborative filtering embeddings cannot be passed to them).*
+The table below compares the fine-tuned local LLM ranker against the first-stage sequential retriever, a zero-shot local baseline, and a state-of-the-art API baseline. Evaluation metrics are calculated on the first 500 users in the evaluation set.
 
 | Model / Stage | HitRate@10 | HitRate@50 | HitRate@100 | NDCG@10 | MRR@10 |
-|:---|---:|---:|---:|---:|---:|
+| :--- | ---: | ---: | ---: | ---: | ---: |
 | First-Stage Retriever (Transformer) | 0.304 | 0.540 | 0.650 | 0.1732 | 0.1338 |
 | **Our LLM Ranker** (Fine-tuned Qwen 1.5B) | **0.256** | **0.492** | 0.650 | **0.1413** | **0.1065** |
 | LLM API Ranker (Qwen 3.5 Plus, Zero-Shot) | 0.158 | 0.468 | 0.650 | 0.0816 | 0.0584 |
@@ -27,9 +25,13 @@ The table below compares the fine-tuned local LLM ranker against the first-stage
 
 *\* Rankers are evaluated over the top 100 candidates retrieved by the First-Stage Retriever (HitRate@100 is capped at 0.650).*
 
+*\* The zero-shot and API baselines rely entirely on the history of text titles, as collaborative filtering embeddings cannot be passed to them.*
+
+*\* see [LLM Training Notebook](/docs/LLM_training.ipynb) for training details and uploaded model weights.*
+
 ### Analysis & Baseline Commentary
 
-* **The "Blank Slate" of the 1.5B Base Model**: The zero-shot Qwen 1.5B model performs at essentially a random guess level (yielding a HitRate@10 of only 0.082 out of a maximum possible 0.650). Given this weak prior, the performance leap achieved by our fine-tuned, multimodal 1.5B model is strong.
+* **The "Blank Slate" of the 1.5B Base Model**: The zero-shot Qwen 1.5B model performs at essentially a random guess level (yielding a HitRate@10 of only 0.082 out of a maximum possible 0.650). **Given this weak prior**, the performance leap achieved by our fine-tuned, multimodal 1.5B model is strong.
 * **The Power of World Knowledge**: The API baseline utilizes `qwen3.5-plus-2026-02-15` (evaluated with `temperature=0` and `enable_thinking=False`). Relying on the textual history of movie titles, its embedded world knowledge allows it to effectively double the performance of the local zero-shot baseline.
 * **Multimodal Ranking**: By fusing collaborative filtering embeddings with text, our fine-tuned 4-bit 1.5B model drastically outperforms the state-of-the-art Qwen 3.5-Plus model (397B), demonstrating a **+62% relative improvement in HitRate@10** and a **+73% relative improvement in NDCG@10**.
 
@@ -37,14 +39,14 @@ The table below compares the fine-tuned local LLM ranker against the first-stage
 
 The following insights are derived from empirical ablations during the model's development:
 
-* **Embedding Positioning**: Injecting the item embedding *before* the item title consistently improves ranking performance compared to placing it after.
-* **Negative Sampling Strategy**: Relying solely on hard negatives from the top 100 degrades training. A dynamic batching ratio of **1 positive, 1 hard negative, and 2 random negatives** yielded the best downstream metrics.
-* **Training Schedule**: A learning rate of `3e-4` was too aggressive; the final model stabilized using `1e-4` with cosine decay. The model was trained for ~50k steps utilizing Unsloth 4-bit QLoRA, with the best checkpoint (based on `NDCG@10`) occurring around 70% of the way through the run.
+* **Embedding Positioning**: Injecting the item embedding *before* the item title improves ranking performance compared to placing it after.
+* **Negative Sampling Strategy**: Relying solely on hard negatives from the top 100 degrades training. A ratio of 1 positive, 1 hard negative, and 2 random negatives yielded the good downstream metrics.
+* **Training Schedule**: We tested learning rates from `5e-5` to `2e-4` (all performed well); the reported metrics come from a run with `lr=1e-4` and cosine decay. The model was trained for ~50k steps with Unsloth 4-bit QLoRA, the best checkpoint by `NDCG@10` appeared at ≈70% of training, and we used `alpha=32`, `rank=16`.
 * **End-to-End vs. Two-Stage**: While two-stage training (projection first, then full model) is beneficial for short runs (~10k steps), direct end-to-end training achieved slightly better performance over the full 50k step budget.
 
 ## Training Data
 
-Example of a training instance prior to tokenization. The `<movie_emb>` tokens act as placeholders where the MLP-projected item embeddings are injected into the transformer's continuous input embedding space.
+Example of a training instance prior to tokenization. The `<movie_emb>` tokens act as placeholders where the MLP-projected item embeddings are injected into the LLM's continuous input embedding space.
 
 ```text
 <|im_start|>system
@@ -72,10 +74,10 @@ Yes<|im_end|>
 
 ## Engineering & Inference Optimizations
 
-To scale training and evaluation, the pipeline implements several system-level optimizations:
+Our pipeline implements several system-level optimizations:
 
+* **Custom Multimodal Collator (Training):** A custom `DataCollatorForLanguageModeling` handles dynamic padding and tensor alignment for the item sequence embeddings. It ensures that cross-entropy loss is strictly calculated only on the **completion tokens** (`Yes<|im_end|>` or `No<|im_end|>`).
 * **Prefix Embedding Reuse (Inference):** The evaluator (`LocalLLMScorer`) processes the system prompt and user history text *once*, caches the prefix embeddings, and then dynamically injects candidate embeddings via suffix concatenation in mini-batches.
-* **Custom Multimodal Collator (Training):** A custom `DataCollatorForLanguageModeling` handles dynamic padding and tensor alignment for the item sequence embeddings. It ensures that cross-entropy loss is strictly calculated only on the completion tokens (`Yes<|im_end|>` or `No<|im_end|>`).
 * **High-Throughput Asynchronous Evaluation:** For API baselines, the evaluator utilizes concurrent `asyncio` and `aiohttp` request pooling with rate-limit handling and automatic caching to maximize throughput.
 
 ## Tested Environments
@@ -192,3 +194,18 @@ yarl==1.23.0
 ```
 
 </details>
+
+### ⚠️ Note on Checkpoint Compatibility (Vocabulary Size Mismatch)
+
+If you stick to a single environment for both training and inference, you will not face this issue.
+
+However, if you train in Environment A (Colab) and then load the checkpoints in Environment B (Docker), or vice versa, you likely will encounter a `size mismatch` error for the `embed_tokens` layer.
+
+**Why?** Newer versions of `unsloth` automatically inject a `<|PAD_TOKEN|>` into Qwen 2.5 models at runtime to patch a known bug ([Unsloth Issue #3721](https://github.com/unslothai/unsloth/issues/3721)). Because the provided weights were trained before this auto-patching, the tokenizer sizes will clash.
+
+**The Fix:**
+Downgrade your environment to match my training setup before loading the [provided checkpoints](https://huggingface.co/zheliu97/nanoRecSys/tree/main). Run this:
+
+```bash
+pip install transformers==4.57.2 unsloth==2025.11.1 unsloth_zoo==2025.11.2
+```

@@ -744,7 +744,7 @@ class ZeroShotLocalLLMScorer:
 
 def _build_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        description="Evaluate LLM-based re-rankers on the two-tower retrieval candidates."
+        description="Evaluate LLM-based rerankers on the two-tower retrieval candidates."
     )
     p.add_argument(
         "--method",

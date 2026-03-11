@@ -61,7 +61,7 @@ Below are the configurations selected based on **our experiments** and their ali
 
 ## Ranker: Hybrid MLP
 
-The second stage is a re-ranking model designed to introduce **content-based signals** (Genre, Year) alongside the collaborative filtering signals from the Retriever.
+The second stage is a reranking model designed to introduce **content-based signals** (Genre, Year) alongside the collaborative filtering signals from the Retriever.
 
 ### Architecture
 

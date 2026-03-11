@@ -37,6 +37,10 @@ The graph below compares `IVF-PQ`, `IVF-SQ` against `FlatIP` (baseline, Recall =
 
 We performed end-to-end load testing to validate the system's throughput and latency (30% Cold Users / 70% Cache Hits). We compared a **Baseline (PyTorch)** implementation against an **Optimized (Quantized ONNX + AsyncIO)** implementation.
 
+> Architectural Note: The benchmarks in this section evaluate the **Production Pipeline** (Sequential Transformer + FAISS + Hybrid MLP Ranker).
+
+> Serving the experimental 1.5B Multimodal LLM Ranker requires dedicated GPU hardware (e.g., via vLLM or TensorRT-LLM) and is fundamentally incompatible with the strict 50ms / 2-vCPU constraints tested here. Therefore, the LLM Ranker is evaluated completely offline.
+
 ### 3.1 Optimization Results
 
 We improved the serving stack by:

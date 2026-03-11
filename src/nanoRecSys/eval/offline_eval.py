@@ -732,7 +732,7 @@ class OfflineEvaluator:
 
     def eval_ranker(self, new_items=False):
         """
-        Evaluate Ranker (Re-rank Top-100 from Retrieval).
+        Evaluate Ranker (Rerank Top-100 from Retrieval).
 
         Args:
             new_items: if True, treat all candidates as new items
@@ -772,7 +772,7 @@ class OfflineEvaluator:
                     metrics_sum, res_retrieval, prefix="Retrieval_"
                 )
 
-            # --- B. Ranker Re-Ranking ---
+            # --- B. Ranker Reranking ---
             new_item_mask = None
             if new_items:
                 # Mask all items as new

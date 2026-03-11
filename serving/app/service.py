@@ -464,7 +464,7 @@ class RecommendationService:
             candidate_indices, dtype=torch.long, device=self.device
         )
 
-        # 4. Re-Rank
+        # 4. Rerank
         t_rank_start = time.time()
         with torch.inference_mode():
             # Prepare Ranker Inputs

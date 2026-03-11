@@ -1,4 +1,4 @@
-# Multimodal LLM for Candidate Re-ranking
+# Multimodal LLM for Candidate Reranking
 
 This LLM ranker is an **experimental research extension** to the main recommendation pipeline.
 

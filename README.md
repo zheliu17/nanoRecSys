@@ -17,7 +17,7 @@
 
 ---
 
-### Multimodal LLM Re-ranker (Experimental)
+### Multimodal LLM Reranker (Experimental)
 
 > As a research extension, this project implements a **multimodal LLM reranker** that grounds a fine-tuned `Qwen2.5-1.5B` model with collaborative filtering item embeddings for top-K recommendation reranking.
 
@@ -39,10 +39,12 @@ Compared against recent literature (ICML'24, WWW'25), our retrieval model perfor
 
 #### Online Latency
 
-Load tested with `locust` on a CPU-only laptop setup:
+Load tested with `locust` on a restricted CPU-only Docker setup (2 vCPUs) using the **MLP Ranker**：
 
-* **Cold-path inference:** ~23ms (2 vCPU; transformer user embedding + FAISS + ranking)
+* **Cold-path inference:** ~23ms (2 vCPU; transformer user embedding + FAISS + MLP ranking)
 * **P95 Latency:** 180ms (end-to-end)
+
+> The LLM Ranker is currently offline-only due to compute constraints
 
 ## Quick Start
 
@@ -98,15 +100,15 @@ graph TD
         subgraph "Inference Pipeline"
             Retrieval[Retrieval Service] -->|2. Encode User Seq| QueryEnc[Transformer User Encoder]
             QueryEnc -->|3. Vector Search| FAISS[(FAISS Index)]
-            FAISS -->|4. Candidates| Re-ranker[MLP Ranker]
-            Re-ranker -->|5. Top-K Items| Redis
+            FAISS -->|4. Candidates| Reranker[MLP Ranker]
+            Reranker -->|5. Top-K Items| Redis
         end
     end
 
     subgraph "Offline Training"
         Data[(MovieLens Data)] --> Trainer[Training Pipeline]
         Trainer -->|Updates| QueryEnc
-        Trainer -->|Updates| Re-ranker
+        Trainer -->|Updates| Reranker
         Trainer -->|Builds| FAISS
     end
 ```

@@ -8,7 +8,7 @@ We benchmarked different Approximate Nearest Neighbor (ANN) algorithms using `fa
 
 * **Dataset:** MovieLens-20M (27k items)
 * **Dimension:** 256
-* **Hardware:** Colab Standard CPU (<2 cores @ 2.2GHz>)
+* **Hardware:** Colab standard CPU (≈2 cores @ 2.2 GHz)
 
 ```bash
 python -m nanoRecSys.indexing.benchmark_ivfpq
@@ -29,7 +29,7 @@ python -m nanoRecSys.indexing.synthetic_expand
 python -m nanoRecSys.indexing.benchmark_synthetic --target_count 3_000_000
 ```
 
-The graph below compares `IVF-PQ`, `IVF-SQ` against `FlatIP` (Baseline, Recall=1.0):
+The graph below compares `IVF-PQ`, `IVF-SQ` against `FlatIP` (baseline, Recall = 1.0):
 
 ![Synthetic_Expansion_Results](../docs/images/synthetic_expansion_results.png)
 

@@ -7,7 +7,6 @@
 
 <https://github.com/user-attachments/assets/6d0c4713-c8ab-43ba-b197-d2602244cf35>
 
-
 ## Main System
 
 * **Modern Retrieval Architecture:** A **Sequential Transformer** (SASRec-based) enhanced with RoPE, SwiGLU, and InfoNCE Loss.
@@ -20,11 +19,11 @@
 
 ### Multimodal LLM Re-ranker (Experimental)
 
-In addition to the main pipeline, this repo implements a **Multimodal LLM Ranker** (textual context with collaborative item embeddings) built on `Qwen2.5-1.5B`. Our local **4-bit quantized 1.5B model** significantly outperforms the state-of-the-art `Qwen3.5-Plus` (397B) in zero-shot candidate ranking:
+> As a research extension, this project implements a **multimodal LLM reranker** that grounds a fine-tuned `Qwen2.5-1.5B` model with collaborative filtering item embeddings for top-K recommendation reranking.
 
-* **+62% improvement** in `HitRate@10` (0.256 vs 0.158); **+73% improvement** in `NDCG@10` (0.141 vs 0.081)
+> This approach **substantially** improves over zero-shot LLM baselines in our setup, including **+62% HitRate@10** and **+73% NDCG@10** versus `Qwen3.5-Plus` (397B).
 
-*[Read the detailed architecture, benchmarks, and training ablations in the docs here](docs/LLM_ranker.md)*.
+*[Full details: `docs/LLM_ranker.md`](docs/LLM_ranker.md).*
 
 ## Evaluation & Benchmarks
 
@@ -99,15 +98,15 @@ graph TD
         subgraph "Inference Pipeline"
             Retrieval[Retrieval Service] -->|2. Encode User Seq| QueryEnc[Transformer User Encoder]
             QueryEnc -->|3. Vector Search| FAISS[(FAISS Index)]
-            FAISS -->|4. Candidates| Reranker[MLP Ranker]
-            Reranker -->|5. Top-K Items| Redis
+            FAISS -->|4. Candidates| Re-ranker[MLP Ranker]
+            Re-ranker -->|5. Top-K Items| Redis
         end
     end
 
     subgraph "Offline Training"
         Data[(MovieLens Data)] --> Trainer[Training Pipeline]
         Trainer -->|Updates| QueryEnc
-        Trainer -->|Updates| Reranker
+        Trainer -->|Updates| Re-ranker
         Trainer -->|Builds| FAISS
     end
 ```

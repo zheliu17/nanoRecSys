@@ -1,16 +1,31 @@
 # Multimodal LLM for Candidate Re-ranking
 
-This document details the architecture, training dynamics, engineering optimizations, and empirical ablations of the custom multimodal LLM ranker implemented in this repository. The model is designed to efficiently re-rank the top 100 candidates surfaced by the first-stage retriever.
+This LLM ranker is an **experimental research extension** to the main recommendation pipeline.
+
+Its purpose is to explore whether a small local LLM can be made more useful for recommendation by injecting collaborative filtering item embeddings directly into the prompt stream. It is primarily a demonstration of:
+
+- multimodal LLM adaptation for recommendation,
+- efficient candidate-level reranking,
+- LLM fine-tuning with lightweight adapters,
+- and practical engineering tradeoffs around local inference.
+
+It is **not** the strongest model in the repository overall:
+
+- the first-stage retriever remains stronger on the reported offline ranking metrics;
+- the LLM ranker is only used for reranking a small candidate set, not full-corpus retrieval;
+- and the latency/cost profile makes it unsuitable for a strict real-time serving target.
+
+The main empirical takeaway is that **fine-tuning a local LLM with collaborative embeddings dramatically improves over zero-shot LLM baselines**, including a much larger API model that only sees text titles.
 
 ## Methodology [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/zheliu17/nanoRecSys/blob/main/docs/LLM_training.ipynb)
 
 Unlike approaches such as LLaRA[^1], which frames the task as a multiple-choice selection from a small pool, this ranker treats the problem as a pointwise probability scoring task.
-[^1]: Liao, Jiayi, et al. "Llara: Large language-recommendation assistant." ACM SIGIR 2024. <https://arxiv.org/abs/2312.02445>
+[^1]: Liao, Jiayi, et al. "LLaRA: Large language-recommendation assistant." ACM SIGIR 2024. <https://arxiv.org/abs/2312.02445>
 
-* **Base Model**: `unsloth/qwen2.5-1.5b-instruct-unsloth-bnb-4bit`
-* **Input Structure**: System instruction + the user's viewing history (top 10 most recently watched movie titles) + candidate movie.
-* **Multimodal Injection**: The text prompt is fused directly with collaborative filtering item embeddings via a trained MLP projection layer.
-* **Objective**: The model is asked whether a user will watch the candidate movie. Final candidate ranking scores are calculated using the difference in output probabilities/logits between the "Yes" and "No" tokens.
+- **Base Model**: `unsloth/qwen2.5-1.5b-instruct-unsloth-bnb-4bit`
+- **Input Structure**: System instruction + the user's viewing history (top 10 most recently watched movie titles) + candidate movie.
+- **Multimodal Injection**: The text prompt is fused directly with collaborative filtering item embeddings via a trained MLP projection layer.
+- **Objective**: The model is asked whether a user will watch the candidate movie. Final candidate ranking scores are calculated using the difference in output probabilities/logits between the "Yes" and "No" tokens.
 
 ## Evaluation Benchmarks
 
@@ -29,20 +44,28 @@ The table below compares the fine-tuned local LLM ranker against the first-stage
 
 *\* see [LLM Training Notebook](/docs/LLM_training.ipynb) for training details and uploaded model weights.*
 
-### Analysis & Baseline Commentary
+### Interpretation
 
-* **The "Blank Slate" of the 1.5B Base Model**: The zero-shot Qwen 1.5B model performs at essentially a random guess level (yielding a HitRate@10 of only 0.082 out of a maximum possible 0.650). **Given this weak prior**, the performance leap achieved by our fine-tuned, multimodal 1.5B model is strong.
-* **The Power of World Knowledge**: The API baseline utilizes `qwen3.5-plus-2026-02-15` (evaluated with `temperature=0` and `enable_thinking=False`). Relying on the textual history of movie titles, its embedded world knowledge allows it to effectively double the performance of the local zero-shot baseline.
-* **Multimodal Ranking**: By fusing collaborative filtering embeddings with text, our fine-tuned 4-bit 1.5B model drastically outperforms the state-of-the-art Qwen 3.5-Plus model (397B), demonstrating a **+62% relative improvement in HitRate@10** and a **+73% relative improvement in NDCG@10**.
+A few points are important when reading the table above:
+
+- **The first-stage retriever remains the strongest component overall** on the reported offline ranking metrics.
+- The LLM ranker should therefore be viewed as an **experimental reranking model**, not a replacement for the core retrieval system.
+- The most meaningful comparison here is against **zero-shot LLM baselines**, since those measure how much value is added by task-specific fine-tuning and collaborative embedding fusion.
+
+Key takeaways:
+
+- **Zero-shot local LLMs are weak for this task.** The base 1.5B Qwen model performs near-random on this candidate ranking setup when it only sees titles.
+- **Large API LLMs help, but world knowledge alone is not enough.** `Qwen3.5-Plus` improves substantially over the zero-shot local model, showing that pretrained knowledge helps interpret movie titles and viewing patterns.
+- **Embedding-grounded fine-tuning matters more than model size here.** Our fine-tuned local 1.5B model outperforms both zero-shot baselines, suggesting that collaborative signals are much more useful than title text alone for this recommendation task.
 
 ## Empirical Findings & Ablations
 
 The following insights are derived from empirical ablations during the model's development:
 
-* **Embedding Positioning**: Injecting the item embedding *before* the item title improves ranking performance compared to placing it after.
-* **Negative Sampling Strategy**: Relying solely on hard negatives from the top 100 degrades training. A ratio of 1 positive, 1 hard negative, and 2 random negatives yielded the good downstream metrics.
-* **Training Schedule**: We tested learning rates from `5e-5` to `2e-4` (all performed well); the reported metrics come from a run with `lr=1e-4` and cosine decay. The model was trained for ~50k steps with Unsloth 4-bit QLoRA, the best checkpoint by `NDCG@10` appeared at ≈70% of training, and we used `alpha=32`, `rank=16`.
-* **End-to-End vs. Two-Stage**: While two-stage training (projection first, then full model) is beneficial for short runs (~10k steps), direct end-to-end training achieved slightly better performance over the full 50k step budget.
+- **Embedding Positioning**: Injecting the item embedding *before* the item title improves ranking performance compared to placing it after.
+- **Negative Sampling Strategy**: Relying solely on hard negatives from the top 100 degrades training. A ratio of 1 positive, 1 hard negative, and 2 random negatives yielded the good downstream metrics.
+- **Training Schedule**: We tested learning rates from `5e-5` to `2e-4` (all performed well); the reported metrics come from a run with `lr=1e-4` and cosine decay. The model was trained for ~50k steps with Unsloth 4-bit QLoRA, the best checkpoint by `NDCG@10` appeared at ≈70% of training, and we used `alpha=32`, `rank=16`.
+- **End-to-End vs. Two-Stage**: While two-stage training (projection first, then full model) is beneficial for short runs (~10k steps), direct end-to-end training achieved slightly better performance over the full 50k step budget.
 
 ## Training Data
 
@@ -76,9 +99,9 @@ Yes<|im_end|>
 
 Our pipeline implements several system-level optimizations:
 
-* **Custom Multimodal Collator (Training):** A custom `DataCollatorForLanguageModeling` handles dynamic padding and tensor alignment for the item sequence embeddings. It ensures that cross-entropy loss is strictly calculated only on the **completion tokens** (`Yes<|im_end|>` or `No<|im_end|>`).
-* **Prefix Embedding Reuse (Inference):** The evaluator (`LocalLLMScorer`) processes the system prompt and user history text *once*, caches the prefix embeddings, and then dynamically injects candidate embeddings via suffix concatenation in mini-batches.
-* **High-Throughput Asynchronous Evaluation:** For API baselines, the evaluator utilizes concurrent `asyncio` and `aiohttp` request pooling with rate-limit handling and automatic caching to maximize throughput.
+- **Custom Multimodal Collator (Training):** A custom `DataCollatorForLanguageModeling` handles dynamic padding and tensor alignment for the item sequence embeddings. It ensures that cross-entropy loss is strictly calculated only on the **completion tokens** (`Yes<|im_end|>` or `No<|im_end|>`).
+- **Prefix Embedding Reuse (Inference):** The evaluator (`LocalLLMScorer`) processes the system prompt and user history text *once*, caches the prefix embeddings, and then dynamically injects candidate embeddings via suffix concatenation in mini-batches.
+- **High-Throughput Asynchronous Evaluation:** For API baselines, the evaluator utilizes concurrent `asyncio` and `aiohttp` request pooling with rate-limit handling and automatic caching to maximize throughput.
 
 ## Tested Environments
 

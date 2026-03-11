@@ -16,7 +16,7 @@ This implementation follows a "modern recsys stack" variant:
 ### Dataset & Evaluation
 
 * **Dataset:** MovieLens-20M.
-* **Splitting Strategy:** Leave-One-One (LOO). The last interaction for each user is held out for testing.
+* **Splitting Strategy:** Leave-One-Out (LOO). The last interaction for each user is held out for testing.
 * **Metrics:** HitRate@10 (HR@10) and NDCG@10. We rank the ground-truth item against **all** other items (full ranking), excluding items the user has already interacted with.
 
 ### Results
@@ -43,14 +43,14 @@ Comparing our implementation against reported results in recent literature:
 
 ### Hyperparameters & Design Choices
 
-Below are the configurations selected based on **our experiments** and their alignment recent literature:
+Below are the configurations selected based on **our experiments** and their alignment with recent literature:
 
 1. **RoPE:** Our experiments suggest RoPE improves performance over learnable absolute embeddings.
 2. **Embedding Dimension:** 256. Found to be optimal in our tests (consistent with [^1][^2][^3][^4][^5]).
 3. **Model Depth:** 4 Layers, 8 Heads. Our experiments confirm that this larger capacity (vs original SASRec's 2 layers) improves performance (see also [^3][^5]).
 4. **Dropout:** Similar to [^3][^5], we find 0.2 dropout slightly improves performance.
 5. **SwiGLU:** Experiments show SwiGLU requires a larger expansion factor (4x) to perform well (see also [^3]).
-6. **Negatives:** In-batch negatives performs similar to the Sampled Softmax approach[^4] with a large number of negatives (3000). Sampled 256 negatives are not optimal.
+6. **Negatives:** In-batch negatives perform similarly to the Sampled Softmax approach[^4] when using a large number of negatives (3000). Sampling 256 negatives is not optimal.
 7. **Loss Function:** InfoNCE with a fixed, low temperature ($ \tau=0.05 $). Our experiments suggest that a low temperature is crucial for performance when using cosine similarity (consistent with [^1][^5]). Decoupled Contrastive Learning (DCL) doesn't show significant improvements in our tests.
 8. **Optimizer:** AdamW with $\beta_2=0.98$ and 0 weight decay. We found lower weight decay slightly improves performance.
 

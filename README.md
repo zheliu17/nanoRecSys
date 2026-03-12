@@ -46,6 +46,15 @@ Load tested with `locust` on a restricted CPU-only Docker setup (2 vCPUs) using 
 
 > The LLM Ranker is currently offline-only due to compute constraints
 
+## Documentation
+
+- [System Design](./docs/System_design.md) — architecture, artifact flow, and design tradeoffs
+- [Reproducibility](./docs/Reproducibility.md) — full retraining vs fast artifact reproduction
+- [Operations Guide](./docs/Operations.md) — local runbook for serving, rebuilding, and debugging
+- [Training Details](./docs/Training.md) — retriever architecture and offline evaluation
+- [Benchmarks](./docs/Benchmark.md) — ANN, scaling, and latency analysis
+- [LLM Ranker](./docs/LLM_ranker.md) — experimental multimodal reranking extension
+
 ## Quick Start
 
 ### 1. Installation

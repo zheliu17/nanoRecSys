@@ -12,8 +12,18 @@ services:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - FAISS_INDEX_TYPE=flat
+      - CACHE_NAMESPACE=v1
+      - UVICORN_WORKERS=2
+      - NANORECSYS_LOG_REQUESTS=1
+      - NANORECSYS_INCLUDE_DEBUG_FIELDS=1
     depends_on:
       - redis
+    healthcheck:
+      test: [ "CMD", "curl", "-fsS", "http://localhost:8000/healthz" ]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
 
   frontend:
     build:
@@ -32,3 +42,8 @@ services:
     image: redis:alpine
     ports:
       - "6379:6379"
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 10s
+      timeout: 3s
+      retries: 5

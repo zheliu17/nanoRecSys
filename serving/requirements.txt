@@ -3,6 +3,7 @@ uvicorn>=0.30.0
 redis
 faiss-cpu
 numpy
+orjson
 pandas
 pyarrow
 pydantic

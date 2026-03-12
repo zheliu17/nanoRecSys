@@ -48,35 +48,35 @@ class RecSysUser(HttpUser):
                     if "debug_timing" in data and data["debug_timing"]:
                         timings = data["debug_timing"]
                         # Report to Locust as "custom" request
-                        if "embedding" in timings:
+                        if "embedding_ms" in timings:
                             events.request.fire(
                                 request_type="DB",
                                 name="Embedding",
-                                response_time=timings["embedding"],
+                                response_time=timings["embedding_ms"],
                                 response_length=0,
                                 exception=None,
                             )
-                        if "retrieval" in timings:
+                        if "retrieval_ms" in timings:
                             events.request.fire(
                                 request_type="DB",
                                 name="Retrieval",
-                                response_time=timings["retrieval"],
+                                response_time=timings["retrieval_ms"],
                                 response_length=0,
                                 exception=None,
                             )
-                        if "ranking" in timings:
+                        if "ranking_ms" in timings:
                             events.request.fire(
                                 request_type="DB",
                                 name="Ranking",
-                                response_time=timings["ranking"],
+                                response_time=timings["ranking_ms"],
                                 response_length=0,
                                 exception=None,
                             )
-                        if "total" in timings:
+                        if "total_ms" in timings:
                             events.request.fire(
                                 request_type="DB",
                                 name="Server_Processing",
-                                response_time=timings["total"],
+                                response_time=timings["total_ms"],
                                 response_length=0,
                                 exception=None,
                             )

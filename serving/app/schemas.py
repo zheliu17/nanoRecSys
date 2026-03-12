@@ -19,9 +19,15 @@ from pydantic import BaseModel, Field
 
 class RecommendRequest(BaseModel):
     user_id: int = Field(
-        ..., description="ID of the user to get recommendations for", example=123
-    )  # type: ignore
-    k: int = Field(10, description="Number of recommendations to return", example=10)  # type: ignore
+        ..., description="ID of the user to get recommendations for", examples=[123]
+    )
+    k: int = Field(
+        10,
+        ge=1,
+        le=100,
+        description="Number of recommendations to return",
+        examples=[10],
+    )
     explain: bool = Field(
         False, description="Whether to include explanations for each recommendation"
     )
@@ -40,9 +46,16 @@ class RecommendResponse(BaseModel):
         None, description="Optional human-readable explanations for recommendations"
     )
     debug_timing: dict | None = Field(
-        None, description="Optional debug timing information (for development)"
+        None, description="Optional debug timing information"
     )
     history: list[int] | None = Field(
         None,
         description="Optional user history included when `include_history` is true",
     )
+    request_id: str | None = Field(
+        None, description="Request identifier for tracing and debugging"
+    )
+    served_from_cache: bool | None = Field(
+        None, description="Whether the response came from Redis cache"
+    )
+    mode: str | None = Field(None, description="Serving mode, e.g. 'stub' or 'live'")

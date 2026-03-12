@@ -16,7 +16,14 @@ import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import ORJSONResponse
 
+from .exceptions import (
+    ArtifactMissingError,
+    InvalidRecommendationRequestError,
+    ServiceNotReadyError,
+    UserNotFoundError,
+)
 from .schemas import RecommendRequest, RecommendResponse
 from .service import RecommendationService
 
@@ -27,26 +34,32 @@ service = None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    import concurrent.futures
     import asyncio
+    import concurrent.futures
 
-    # We want a single thread for compute to minimize context switching/contention
     loop = asyncio.get_running_loop()
     loop.set_default_executor(concurrent.futures.ThreadPoolExecutor(max_workers=1))
 
     global service
     logger.info("Initializing Recommendation Service...")
     service = RecommendationService()
+    await service.post_init()
+    logger.info("Recommendation Service initialized. ready=%s", service.ready)
     yield
     logger.info("Shutting down...")
 
 
-app = FastAPI(title="NanoRecSys Serving", lifespan=lifespan)
+app = FastAPI(
+    title="NanoRecSys Serving",
+    lifespan=lifespan,
+    default_response_class=ORJSONResponse,
+)
 
 
 @app.post(
     "/recommend",
     response_model=RecommendResponse,
+    response_model_exclude_none=True,
     summary="Get movie recommendations",
     description=(
         "Return top-k movie recommendations for a user. "
@@ -55,13 +68,6 @@ app = FastAPI(title="NanoRecSys Serving", lifespan=lifespan)
     ),
 )
 async def recommend(request: RecommendRequest):
-    """Get recommendations for a user.
-
-    - `user_id`: numeric id of the user
-    - `k`: number of items to return
-    - `explain`: include explanations per item
-    - `include_history`: include user's history in the response
-    """
     if service is None:
         raise HTTPException(status_code=503, detail="Service not initialized")
 
@@ -73,11 +79,48 @@ async def recommend(request: RecommendRequest):
             include_history=request.include_history,
         )
         return result
-    except Exception as e:
+    except InvalidRecommendationRequestError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except UserNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except (ServiceNotReadyError, ArtifactMissingError) as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except Exception:
         logger.exception("Error processing recommendation request")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @app.get("/health")
 def health():
+    # Backward-compatible alias
     return {"status": "ok"}
+
+
+@app.get("/healthz")
+def healthz():
+    return {"status": "ok"}
+
+
+@app.get("/readyz")
+def readyz():
+    if service is None:
+        raise HTTPException(status_code=503, detail="Service not initialized")
+
+    status = service.get_status()
+    if not status["ready"]:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "status": "not_ready",
+                "errors": status["errors"],
+                "warnings": status["warnings"],
+            },
+        )
+    return status
+
+
+@app.get("/debug/status")
+def debug_status():
+    if service is None:
+        raise HTTPException(status_code=503, detail="Service not initialized")
+    return service.get_status()

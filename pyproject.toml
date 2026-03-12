@@ -35,6 +35,7 @@ all = [
     "nbstripout",
     "onnxruntime",
     "onnxscript",
+    "orjson",
     "redis",
     "streamlit",
     "uvicorn",

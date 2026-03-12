@@ -51,11 +51,14 @@ api_status = st.sidebar.empty()
 
 def check_api():
     try:
-        r = requests.get(f"{API_URL}/health", timeout=1)  # type: ignore
+        r = requests.get(f"{API_URL}/readyz", timeout=1)  # type: ignore
         if r.status_code == 200:
-            api_status.success("API Online 🟢")
+            payload = r.json()
+            api_status.markdown(
+                f"**API Ready 🟢**  \n\n- mode: `{payload.get('mode')}`\n- ranker: `{payload.get('ranker_backend')}`"
+            )
         else:
-            api_status.warning(f"API Error {r.status_code} 🟡")
+            api_status.warning(f"API Not Ready {r.status_code} 🟡")
     except Exception:
         api_status.error("API Offline 🔴")
 
@@ -220,14 +223,16 @@ if st.button("Generate Recommendations", type="primary", use_container_width=Tru
                 if timings:
                     st.subheader("System Latency")
                     t_cols = st.columns(4)
-                    t_cols[0].metric("Total", f"{timings.get('total', 0):.1f} ms")
+                    t_cols[0].metric("Total", f"{timings.get('total_ms', 0):.1f} ms")
                     t_cols[1].metric(
-                        "Embedding", f"{timings.get('embedding', 0):.1f} ms"
+                        "Embedding", f"{timings.get('embedding_ms', 0):.1f} ms"
                     )
                     t_cols[2].metric(
-                        "Retrieval", f"{timings.get('retrieval', 0):.1f} ms"
+                        "Retrieval", f"{timings.get('retrieval_ms', 0):.1f} ms"
                     )
-                    t_cols[3].metric("Ranking", f"{timings.get('ranking', 0):.1f} ms")
+                    t_cols[3].metric(
+                        "Ranking", f"{timings.get('ranking_ms', 0):.1f} ms"
+                    )
 
         except requests.exceptions.ConnectionError:
             st.error("Could not connect to API. Is the Docker service running?")

@@ -16,6 +16,8 @@ import asyncio
 import logging
 import os
 import time
+import uuid
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -33,27 +35,31 @@ from nanoRecSys.models.ranker import MLPRanker
 from nanoRecSys.models.towers import ItemTower, TransformerUserTower, UserTower
 from nanoRecSys.utils.utils import compute_item_probabilities
 
+from .exceptions import (
+    ArtifactMissingError,
+    InvalidRecommendationRequestError,
+    ServiceNotReadyError,
+)
 from .faiss_store import FaissStore
 from .redis_cache import RedisCache
 
 logger = logging.getLogger(__name__)
 
-RETRIEVAL_K = 100  # Number of candidates
+RETRIEVAL_K = 100
 
 
 class ONNXRanker:
     def __init__(self, path):
         if not ONNX_AVAILABLE:
             raise ImportError("onnxruntime not installed")
-        sess_options = ort.SessionOptions()  # type: ignore
+        sess_options = ort.SessionOptions()  # type: ignore[attr-defined]
         sess_options.intra_op_num_threads = 1
         sess_options.inter_op_num_threads = 1
-        self.session = ort.InferenceSession(  # type: ignore
+        self.session = ort.InferenceSession(  # type: ignore[attr-defined]
             str(path), sess_options=sess_options, providers=["CPUExecutionProvider"]
         )
 
     def predict(self, user_emb, item_emb, genre_multihot, year_idx, popularity):
-        # Convert torch tensors to numpy if needed
         def to_numpy(x):
             return x.cpu().detach().numpy() if hasattr(x, "cpu") else x
 
@@ -73,20 +79,20 @@ class ONNXRanker:
         return torch.from_numpy(out[0]).squeeze()
 
     def eval(self):
-        pass  # No-op for ONNX
+        pass
 
     def to(self, device):
-        pass  # No-op for ONNX (unless using GPU provider)
+        pass
 
 
 class ONNXUserTower:
     def __init__(self, path):
         if not ONNX_AVAILABLE:
             raise ImportError("onnxruntime not installed")
-        sess_options = ort.SessionOptions()  # type: ignore
+        sess_options = ort.SessionOptions()  # type: ignore[attr-defined]
         sess_options.intra_op_num_threads = 1
         sess_options.inter_op_num_threads = 1
-        self.session = ort.InferenceSession(  # type: ignore
+        self.session = ort.InferenceSession(  # type: ignore[attr-defined]
             str(path), sess_options=sess_options, providers=["CPUExecutionProvider"]
         )
 
@@ -112,59 +118,96 @@ def _is_truthy_env(name: str, default: str = "0") -> bool:
 
 class RecommendationService:
     def __init__(self):
-        # Force single thread for torch
         torch.set_num_threads(1)
         try:
             torch.set_num_interop_threads(1)
         except RuntimeError:
             pass
 
+        self.device = "cpu"
         self.stub_mode = _is_truthy_env("NANORECSYS_STUB")
+        self.log_requests = _is_truthy_env("NANORECSYS_LOG_REQUESTS")
+        self.include_debug_fields = _is_truthy_env("NANORECSYS_INCLUDE_DEBUG_FIELDS")
+        self.cache = RedisCache()
+
+        self.ready = False
+        self.warnings: list[str] = []
+        self.errors: list[str] = []
+        self.stats = {
+            "requests": 0,
+            "cache_hits": 0,
+            "cache_misses": 0,
+            "cache_errors": 0,
+            "errors": 0,
+        }
+        self.user_tower_backend = "unknown"
+        self.ranker_backend = "unknown"
+        self.index_type = os.getenv("FAISS_INDEX_TYPE", "flat")
+        self.artifacts: dict[str, bool] = {}
+
         if self.stub_mode:
-            self.device = "cpu"
-            self.cache = RedisCache()
             self.user_id_to_idx = {1: 0}
             self.fallback_movie_ids = list(range(1, 1001))
             self.fallback_scores = [
                 1.0 / (i + 1) for i in range(len(self.fallback_movie_ids))
             ]
             self.user_history = {0: [10, 20, 30]}
+            self.ready = True
             logger.warning(
                 "NANORECSYS_STUB=1 enabled: serving stub recommendations (no artifacts required)."
             )
             return
 
-        self.device = "cpu"
-        # Initialize Cache
-        self.cache = RedisCache()
+        self._load_live_service()
 
-        # Initialize FAISS
-        index_type = os.getenv("FAISS_INDEX_TYPE", "flat")
-        self.faiss_store = FaissStore(settings.artifacts_dir, index_type=index_type)
+    async def post_init(self):
+        redis_ok = await self.cache.ping()
+        if not redis_ok:
+            self.warnings.append("Redis unavailable; continuing without cache.")
+            logger.warning("Redis unavailable at startup; continuing without cache.")
 
-        # Load Maps
+    def _mark_artifact(self, name: str, path: Path) -> bool:
+        exists = path.exists()
+        self.artifacts[name] = exists
+        return exists
+
+    def _require_file(self, name: str, path: Path):
+        if not self._mark_artifact(name, path):
+            raise ArtifactMissingError(f"Missing required artifact: {path}")
+
+    def _load_live_service(self):
+        self.faiss_store = FaissStore(
+            settings.artifacts_dir, index_type=self.index_type
+        )
+        if not self.faiss_store.is_ready():
+            raise ArtifactMissingError(
+                f"No FAISS index found in {settings.artifacts_dir}."
+            )
+
         logger.info("Loading maps...")
-        # user_map: index -> raw_id
-        # We need raw_id -> index
-        self.user_map = np.load(settings.processed_data_dir / "user_map.npy")
-        self.user_id_to_idx = {uid: i for i, uid in enumerate(self.user_map)}
+        user_map_path = settings.processed_data_dir / "user_map.npy"
+        item_map_path = settings.processed_data_dir / "item_map.npy"
+        self._require_file("user_map", user_map_path)
+        self._require_file("item_map", item_map_path)
 
-        self.item_map = np.load(settings.processed_data_dir / "item_map.npy")
-        # For mapping back to raw IDs at output
-        # item_map is index -> raw_id, which is what we want for output
+        self.user_map = np.load(user_map_path)
+        self.user_id_to_idx = {uid: i for i, uid in enumerate(self.user_map)}
+        self.item_map = np.load(item_map_path)
 
         n_users = len(self.user_map)
         n_items = len(self.item_map)
 
-        # Load User Tower
-        logger.info(f"Loading User Tower ({settings.user_tower_type})...")
+        logger.info("Loading User Tower (%s)...", settings.user_tower_type)
         onnx_tower_path = settings.artifacts_dir / "user_tower.quant.onnx"
-        if ONNX_AVAILABLE and onnx_tower_path.exists():
-            logger.info(f"Loading User Tower from ONNX: {onnx_tower_path}")
-            self.user_tower = ONNXUserTower(onnx_tower_path)
-        elif settings.user_tower_type == "transformer":
-            # Transformer User Tower uses sequences of items
+        user_tower_ckpt_path = settings.artifacts_dir / "user_tower.pth"
+        self.artifacts["user_tower.quant.onnx"] = onnx_tower_path.exists()
+        self.artifacts["user_tower.pth"] = user_tower_ckpt_path.exists()
 
+        if ONNX_AVAILABLE and onnx_tower_path.exists():
+            logger.info("Loading User Tower from ONNX: %s", onnx_tower_path)
+            self.user_tower = ONNXUserTower(onnx_tower_path)
+            self.user_tower_backend = "onnx"
+        elif settings.user_tower_type == "transformer":
             dummy_item_tower = ItemTower(
                 vocab_size=n_items,
                 embed_dim=settings.embed_dim,
@@ -184,58 +227,55 @@ class RecommendationService:
                 swiglu_hidden_dim=settings.swiglu_hidden_dim,
                 shared_embedding=dummy_item_tower,
             )
+            self.user_tower_backend = "pytorch"
         else:
-            # MLP User Tower uses user ID
             self.user_tower = UserTower(
                 vocab_size=n_users,
                 embed_dim=settings.embed_dim,
                 output_dim=settings.tower_out_dim,
             )
+            self.user_tower_backend = "pytorch"
 
         if not isinstance(self.user_tower, ONNXUserTower):
-            user_tower_path = settings.artifacts_dir / "user_tower.pth"
-            if user_tower_path.exists():
+            if user_tower_ckpt_path.exists():
                 self.user_tower.load_state_dict(
                     torch.load(
-                        user_tower_path, map_location=self.device, weights_only=False
+                        user_tower_ckpt_path,
+                        map_location=self.device,
+                        weights_only=False,
                     )
                 )
             else:
-                logger.error("User Tower checkpoint not found.")
-                raise ValueError(
-                    "User Tower checkpoint is required for the service to function."
+                raise ArtifactMissingError(
+                    f"User Tower checkpoint not found: {user_tower_ckpt_path}"
                 )
             self.user_tower.to(self.device)
             self.user_tower.eval()
 
-        # Load Ranker Metadata
         logger.info("Loading metadata...")
+        genre_path = settings.processed_data_dir / "genre_matrix_binned.npy"
+        year_path = settings.processed_data_dir / "year_indices_binned.npy"
+        self._require_file("genre_matrix_binned", genre_path)
+        self._require_file("year_indices_binned", year_path)
+
         self.genre_matrix = (
-            torch.from_numpy(
-                np.load(settings.processed_data_dir / "genre_matrix_binned.npy")
-            )
-            .float()
-            .to(self.device)
+            torch.from_numpy(np.load(genre_path)).float().to(self.device)
         )
-        self.year_indices = (
-            torch.from_numpy(
-                np.load(settings.processed_data_dir / "year_indices_binned.npy")
-            )
-            .long()
-            .to(self.device)
-        )
+        self.year_indices = torch.from_numpy(np.load(year_path)).long().to(self.device)
 
         num_genres = self.genre_matrix.shape[1]
-        # Year bin size is fixed at 6 (see datasets.py)
         num_years = 6
 
-        # Load Ranker
         logger.info("Loading Ranker...")
-
         onnx_ranker_path = settings.artifacts_dir / "ranker_model.onnx"
+        ranker_ckpt_path = settings.artifacts_dir / "ranker_model.pth"
+        self.artifacts["ranker_model.onnx"] = onnx_ranker_path.exists()
+        self.artifacts["ranker_model.pth"] = ranker_ckpt_path.exists()
+
         if ONNX_AVAILABLE and onnx_ranker_path.exists():
-            logger.info(f"Loading Ranker from ONNX: {onnx_ranker_path}")
+            logger.info("Loading Ranker from ONNX: %s", onnx_ranker_path)
             self.ranker_model = ONNXRanker(onnx_ranker_path)
+            self.ranker_backend = "onnx"
         else:
             self.ranker_model = MLPRanker(
                 input_dim=settings.tower_out_dim,
@@ -245,32 +285,34 @@ class RecommendationService:
                 genre_dim=16,
                 year_dim=8,
             )
-            ranker_path = settings.artifacts_dir / "ranker_model.pth"
-            if ranker_path.exists():
+            if ranker_ckpt_path.exists():
                 self.ranker_model.load_state_dict(
                     torch.load(
-                        ranker_path, map_location=self.device, weights_only=False
+                        ranker_ckpt_path,
+                        map_location=self.device,
+                        weights_only=False,
                     )
                 )
             else:
-                logger.warning("Ranker checkpoint not found.")
+                self.warnings.append(
+                    "Ranker checkpoint missing; service may not function correctly."
+                )
+                logger.warning("Ranker checkpoint not found: %s", ranker_ckpt_path)
             self.ranker_model.to(self.device)
             self.ranker_model.eval()
+            self.ranker_backend = "pytorch"
 
-        # Load Ranker Assets
         logger.info("Loading Ranker Assets...")
         item_emb_path = settings.artifacts_dir / "ranker_item_embeddings.pt"
-        if item_emb_path.exists():
-            self.ranker_item_embeddings = torch.load(
-                item_emb_path, map_location=self.device, weights_only=False
-            )
-        else:
-            logger.warning("Ranker item embeddings not found.")
-            raise ValueError(
-                "Ranker item embeddings are required for the service to function."
-            )
-
         pop_stats_path = settings.artifacts_dir / "ranker_pop_stats.pt"
+        popularity_path = settings.artifacts_dir / "popularity_cache.pt"
+
+        self._require_file("ranker_item_embeddings", item_emb_path)
+        self.ranker_item_embeddings = torch.load(
+            item_emb_path, map_location=self.device, weights_only=False
+        )
+
+        self.artifacts["ranker_pop_stats.pt"] = pop_stats_path.exists()
         if pop_stats_path.exists():
             pop_stats = torch.load(
                 pop_stats_path, map_location=self.device, weights_only=False
@@ -278,171 +320,214 @@ class RecommendationService:
             self.pop_mean = pop_stats["mean"]
             self.pop_std = pop_stats["std"]
         else:
-            logger.warning("Pop stats not found.")
+            self.warnings.append("Ranker popularity stats missing; using defaults.")
+            logger.warning("Pop stats not found. Using defaults.")
             self.pop_mean = 0.0
             self.pop_std = 1.0
 
-        # Load or compute Popularity Tensor
         logger.info("Loading Popularity Tensor...")
-        popularity_path = settings.artifacts_dir / "popularity_cache.pt"
+        self.artifacts["popularity_cache.pt"] = popularity_path.exists()
         if popularity_path.exists():
             self.popularity = torch.load(
                 popularity_path, map_location=self.device, weights_only=False
             )
         else:
-            logger.info("Computing Popularity Tensor (from interactions)...")
-            if (settings.processed_data_dir / "train.parquet").exists():
+            logger.info("Computing Popularity Tensor from interactions...")
+            train_path = settings.processed_data_dir / "train.parquet"
+            self.artifacts["train.parquet"] = train_path.exists()
+            if train_path.exists():
                 popularity = compute_item_probabilities(n_items, return_log_probs=True)
                 popularity = (popularity - self.pop_mean) / (self.pop_std + 1e-6)
                 self.popularity = popularity.to(self.device)
-                # Save for future use
                 torch.save(self.popularity, popularity_path)
-                logger.info(f"Saved popularity tensor to {popularity_path}")
+                logger.info("Saved popularity tensor to %s", popularity_path)
             else:
+                self.warnings.append(
+                    "train.parquet missing; using zero popularity fallback."
+                )
                 logger.warning("train.parquet not found. Using zeros for popularity.")
                 self.popularity = torch.zeros(
                     n_items, dtype=torch.float32, device=self.device
                 )
 
-        # Pre-compute fallback (top-k popular items)
-        # self.popularity is (N_items,)
         pop_vals, pop_indices = torch.topk(self.popularity, k=min(n_items, RETRIEVAL_K))
-
         self.fallback_indices = pop_indices.cpu().numpy()
-        # Heuristic score: sigmoid of normalized popularity => [0, 1] range like ranker
         self.fallback_scores = torch.sigmoid(pop_vals).cpu().numpy().tolist()
         self.fallback_movie_ids = [
             int(self.item_map[idx]) for idx in self.fallback_indices
         ]
 
-        # Load User History
         logger.info("Loading User History...")
         self.user_history = {}
         history_cache_path = settings.artifacts_dir / "user_history_cache.pkl"
+        self.artifacts["user_history_cache.pkl"] = history_cache_path.exists()
 
         if history_cache_path.exists():
-            # Load from cache
             import pickle
 
             try:
                 with open(history_cache_path, "rb") as f:
                     self.user_history = pickle.load(f)
                 logger.info(
-                    f"Loaded cached history for {len(self.user_history)} users."
+                    "Loaded cached history for %s users.", len(self.user_history)
                 )
             except Exception as e:
-                logger.error(f"Error loading cached history: {e}. Will recompute.")
+                logger.error("Error loading cached history: %s. Recomputing.", e)
                 self.user_history = {}
 
         if not self.user_history:
-            # Recompute and cache
             history_path = settings.processed_data_dir / "train.parquet"
+            val_path = settings.processed_data_dir / "val.parquet"
+            self.artifacts["val.parquet"] = val_path.exists()
+
             if history_path.exists():
                 try:
                     import pickle
 
-                    # Load train and val for complete history
                     dfs = []
-                    # Load user_idx, item_idx, and timestamp
                     columns = ["user_idx", "item_idx", "timestamp"]
                     df_train = pd.read_parquet(history_path, columns=columns)
                     dfs.append(df_train)
 
-                    val_path = settings.processed_data_dir / "val.parquet"
                     if val_path.exists():
                         df_val = pd.read_parquet(val_path, columns=columns)
                         dfs.append(df_val)
 
                     full_df = pd.concat(dfs, ignore_index=True)
                     full_df = full_df.sort_values(by=["user_idx", "timestamp"])
-
                     self.user_history = (
                         full_df.groupby("user_idx")["item_idx"].apply(list).to_dict()
                     )
-                    # Save for future use
+
                     with open(history_cache_path, "wb") as f:
                         pickle.dump(self.user_history, f)
+
                     logger.info(
-                        f"Loaded and cached history for {len(self.user_history)} users (train+val)."
+                        "Loaded and cached history for %s users (train+val).",
+                        len(self.user_history),
                     )
                 except Exception as e:
-                    logger.error(f"Error loading history: {e}")
+                    self.warnings.append(f"Failed to compute user history cache: {e}")
+                    logger.error("Error loading history: %s", e)
             else:
+                self.warnings.append("train.parquet missing; user history is empty.")
                 logger.warning("train.parquet not found. History will be empty.")
 
-    def _compute_inference(
-        self, user_id: int, k: int, explain: bool, include_history: bool
+        self.ready = True
+        logger.info(
+            "Recommendation service ready. user_tower_backend=%s ranker_backend=%s index_type=%s",
+            self.user_tower_backend,
+            self.ranker_backend,
+            self.faiss_store.loaded_index_type,
+        )
+
+    def get_status(self) -> dict:
+        return {
+            "ready": self.ready,
+            "stub_mode": self.stub_mode,
+            "warnings": self.warnings,
+            "errors": self.errors,
+            "redis": self.cache.status(),
+            "faiss": self.faiss_store.status() if hasattr(self, "faiss_store") else {},
+            "user_tower_backend": self.user_tower_backend,
+            "ranker_backend": self.ranker_backend,
+            "artifacts": self.artifacts,
+            "stats": self.stats,
+            "mode": "stub" if self.stub_mode else "live",
+        }
+
+    def _ensure_ready(self):
+        if not self.ready:
+            raise ServiceNotReadyError(
+                "Recommendation service is not ready. Check /readyz for details."
+            )
+
+    def _fallback_response(
+        self,
+        k: int,
+        explain: bool,
+        reason: str,
+        include_history: bool = False,
+        request_id: str | None = None,
     ):
-        """
-        Synchronous method containing CPU-bound tasks (Torch, FAISS, Numpy).
-        This method should be run in a separate thread to avoid blocking the asyncio loop.
-        """
-        # Handle Stub Mode (Quick return, but good to keep in the offloaded function for consistency)
+        limit = min(k, len(self.fallback_movie_ids))
+        result = {
+            "movie_ids": self.fallback_movie_ids[:limit],
+            "scores": self.fallback_scores[:limit],
+            "explanations": [reason] * limit if explain else [],
+            "history": [] if include_history else None,
+        }
+        if self.include_debug_fields:
+            result["debug_timing"] = {"fallback_reason": reason}
+            result["request_id"] = request_id
+            result["served_from_cache"] = False
+            result["mode"] = "stub" if self.stub_mode else "live"
+        return result
+
+    def _compute_inference(
+        self,
+        user_id: int,
+        k: int,
+        explain: bool,
+        include_history: bool,
+        request_id: str,
+    ):
         if getattr(self, "stub_mode", False):
             limit = max(0, min(int(k), len(self.fallback_movie_ids)))
-            response = {
-                "movie_ids": self.fallback_movie_ids[:limit],
-                "scores": self.fallback_scores[:limit],
-                "explanations": ["Stub recommendation"] * limit if explain else None,
-                "debug_timing": {"source": "stub"},
-                "history": [10, 20, 30] if include_history else None,
-            }
-            return response
-
-        t0 = time.time()
-        timings = {}
-
-        # 2. Map User ID
-        t_emb_start = time.time()
-        if user_id not in self.user_id_to_idx:
-            # Cold user handling: Return popular items
-            limit = min(k, len(self.fallback_movie_ids))
             return {
                 "movie_ids": self.fallback_movie_ids[:limit],
                 "scores": self.fallback_scores[:limit],
-                "explanations": ["Popularity fallback (User Unknown)"] * limit
-                if explain
-                else None,
+                "explanations": ["Stub recommendation"] * limit if explain else [],
+                "debug_timing": {"source": "stub"},
+                "history": [10, 20, 30] if include_history else None,
+                "request_id": request_id,
+                "served_from_cache": False,
+                "mode": "stub",
             }
+
+        t0 = time.perf_counter()
+        timings = {}
+
+        if user_id not in self.user_id_to_idx:
+            return self._fallback_response(
+                k=k,
+                explain=explain,
+                reason="Popularity fallback (User Unknown)",
+                include_history=include_history,
+                request_id=request_id,
+            )
 
         u_idx = self.user_id_to_idx[user_id]
 
-        # 3. Retrieve Candidates (User Tower + FAISS)
+        t_emb_start = time.perf_counter()
         with torch.inference_mode():
             if settings.user_tower_type == "transformer":
-                # Get user history
                 history = self.user_history.get(u_idx, [])
                 if not history:
-                    # Cold user (known ID but no history) - Fallback
-                    limit = min(k, len(self.fallback_movie_ids))
-                    return {
-                        "movie_ids": self.fallback_movie_ids[:limit],
-                        "scores": self.fallback_scores[:limit],
-                        "explanations": ["Popularity fallback (No History)"] * limit
-                        if explain
-                        else None,
-                    }
+                    return self._fallback_response(
+                        k=k,
+                        explain=explain,
+                        reason="Popularity fallback (No History)",
+                        include_history=include_history,
+                        request_id=request_id,
+                    )
 
-                # Truncate to max_seq_len
                 seq = history[-settings.max_seq_len :]
-                seq = [item + 1 for item in seq]  # Shift by 1 for padding idx=0
+                seq = [item + 1 for item in seq]
                 pad_len = settings.max_seq_len - len(seq)
                 if pad_len > 0:
                     seq = [0] * pad_len + seq
-                # Transformer expects (B, SeqLen)
                 seq_tensor = torch.tensor([seq], dtype=torch.long, device=self.device)
-
-                # Use .encode() for transformer tower
-                user_emb = self.user_tower.encode(seq_tensor)  # (1, emb_dim)
+                user_emb = self.user_tower.encode(seq_tensor)
             else:
                 u_tensor = torch.tensor([u_idx], device=self.device)
-                user_emb = self.user_tower(u_tensor)  # type: ignore # (1, emb_dim)
+                user_emb = self.user_tower(u_tensor)  # type: ignore[operator]
 
-        timings["embedding"] = (time.time() - t_emb_start) * 1000
+        timings["embedding_ms"] = (time.perf_counter() - t_emb_start) * 1000.0
 
-        t_ret_start = time.time()
+        t_ret_start = time.perf_counter()
         candidate_indices, _ = self.faiss_store.search(user_emb, k=RETRIEVAL_K)
-        timings["retrieval"] = (time.time() - t_ret_start) * 1000
+        timings["retrieval_ms"] = (time.perf_counter() - t_ret_start) * 1000.0
 
         history_items = self.user_history.get(u_idx, [])
         if history_items:
@@ -451,35 +536,26 @@ class RecommendationService:
             candidate_indices = filtered
 
         if len(candidate_indices) == 0:
-            limit = min(k, len(self.fallback_movie_ids))
-            return {
-                "movie_ids": self.fallback_movie_ids[:limit],
-                "scores": self.fallback_scores[:limit],
-                "explanations": ["Popularity fallback (No Candidates)"] * limit
-                if explain
-                else None,
-            }
+            return self._fallback_response(
+                k=k,
+                explain=explain,
+                reason="Popularity fallback (No Candidates)",
+                include_history=include_history,
+                request_id=request_id,
+            )
 
         candidate_indices = torch.tensor(
             candidate_indices, dtype=torch.long, device=self.device
         )
 
-        # 4. Rerank
-        t_rank_start = time.time()
+        t_rank_start = time.perf_counter()
         with torch.inference_mode():
-            # Prepare Ranker Inputs
-            # User emb expanded
             user_emb_expanded = user_emb.repeat(len(candidate_indices), 1)
-
-            # Item embs
             item_embs = self.ranker_item_embeddings[candidate_indices]
-
-            # Metadata
             genres = self.genre_matrix[candidate_indices]
             years = self.year_indices[candidate_indices]
             pops = self.popularity[candidate_indices]
 
-            # Predict
             scores = self.ranker_model.predict(
                 user_emb=user_emb_expanded,
                 item_emb=item_embs,
@@ -487,44 +563,53 @@ class RecommendationService:
                 year_idx=years,
                 popularity=pops,
             )
-            # scores is (B,) probabilities
 
-        # 5. Sort and Select Top-K
         topk_scores, topk_indices = torch.topk(scores, k=min(k, len(scores)))
 
-        # Map back to raw IDs
         final_indices = candidate_indices[topk_indices].cpu().numpy()
         final_scores = topk_scores.cpu().numpy().tolist()
-
         final_movie_ids = [int(self.item_map[idx]) for idx in final_indices]
 
-        timings["ranking"] = (time.time() - t_rank_start) * 1000
-        timings["total"] = (time.time() - t0) * 1000
+        timings["ranking_ms"] = (time.perf_counter() - t_rank_start) * 1000.0
+        timings["total_ms"] = (time.perf_counter() - t0) * 1000.0
 
         result = {
             "movie_ids": final_movie_ids,
             "scores": final_scores,
-            "explanations": None,
-            "debug_timing": timings,
+            "explanations": [],
         }
 
-        # 6. Explanations
+        if self.include_debug_fields:
+            result["debug_timing"] = timings
+            result["request_id"] = request_id
+            result["served_from_cache"] = False
+            result["mode"] = "live"
+
         if explain:
             result["explanations"] = ["Explanation not implemented"] * len(
                 final_movie_ids
             )
 
-        # 7. History
         if include_history:
             if u_idx in self.user_history:
                 hist_indices = self.user_history[u_idx]
-                # Limit to last 20 items to save bandwidth
                 if len(hist_indices) > 20:
                     hist_indices = hist_indices[-20:]
-
                 result["history"] = [int(self.item_map[idx]) for idx in hist_indices]
             else:
                 result["history"] = []
+
+        if self.log_requests:
+            logger.info(
+                "recommend request_id=%s user_id=%s k=%s cache_hit=false embedding_ms=%.2f retrieval_ms=%.2f ranking_ms=%.2f total_ms=%.2f",
+                request_id,
+                user_id,
+                k,
+                timings.get("embedding_ms", 0.0),
+                timings.get("retrieval_ms", 0.0),
+                timings.get("ranking_ms", 0.0),
+                timings.get("total_ms", 0.0),
+            )
 
         return result
 
@@ -535,35 +620,57 @@ class RecommendationService:
         explain: bool = False,
         include_history: bool = False,
     ):
-        """
-        Async entry point. Handles Cache (I/O) and offloads Compute (CPU) to a thread.
-        """
-        # 1. Check Redis Cache (Async I/O - Keep this in the main loop!)
-        cache_key = f"user:{user_id}:k:{k}:h:{int(include_history)}:e:{int(explain)}"
+        self._ensure_ready()
+        self.stats["requests"] += 1
+
+        if k < 1 or k > 100:
+            self.stats["errors"] += 1
+            raise InvalidRecommendationRequestError("k must be between 1 and 100")
+
+        request_id = uuid.uuid4().hex[:12]
+        cache_namespace = os.getenv("CACHE_NAMESPACE", "v1")
+        cache_key = (
+            f"{cache_namespace}:user:{user_id}:k:{k}:"
+            f"h:{int(include_history)}:e:{int(explain)}"
+        )
+
         cached = await self.cache.get(cache_key)
         if cached:
-            # Add basic timing info for cache hit
-            cached["debug_timing"] = {
-                "source": "cache",
-            }
+            self.stats["cache_hits"] += 1
+            if self.include_debug_fields:
+                cached["debug_timing"] = {"source": "cache"}
+                cached["served_from_cache"] = True
+                cached["request_id"] = request_id
+                cached["mode"] = "stub" if self.stub_mode else "live"
+            if self.log_requests:
+                logger.info(
+                    "recommend request_id=%s user_id=%s k=%s cache_hit=true",
+                    request_id,
+                    user_id,
+                    k,
+                )
             return cached
 
-        # 2. Cache Miss? Run inference in a separate thread.
+        self.stats["cache_misses"] += 1
+
         loop = asyncio.get_running_loop()
         try:
             result = await loop.run_in_executor(
-                None,  # Use default ThreadPoolExecutor
-                self._compute_inference,  # Function to run
+                None,
+                self._compute_inference,
                 user_id,
                 k,
                 explain,
-                include_history,  # Args
+                include_history,
+                request_id,
             )
-        except Exception as e:
+        except Exception:
+            self.stats["errors"] += 1
             logger.exception("Error during threaded inference")
-            raise e
+            raise
 
-        # 3. Save to Redis
         await self.cache.set(cache_key, result)
+        if not self.cache.available:
+            self.stats["cache_errors"] = self.cache.error_count
 
         return result
